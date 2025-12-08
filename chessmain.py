@@ -69,11 +69,14 @@ class ChessBoardWidget(QWidget):
             move = Move(self.selected_sq, target, self.gs.board)
             if move in self.valid_moves:
                 self.gs.makeMove(move)
+                self.main_window.undo_stack.append(move)  # push to undo stack
+                self.main_window.redo_stack.clear()       # clear redo stack
                 self.selected_sq = None
                 self.move_highlight.clear()
                 self.valid_moves = self.gs.getValidMoves()
                 self.main_window.play_move_sound(capture=move.pieceCaptured != "--")
                 self.main_window.update_turn_message()
+
                 # If single-player and AI turn
                 if self.main_window.singleplayer and not self.gs.whiteToMove:
                     QTimer.singleShot(500, self.main_window.ai_move)
@@ -89,7 +92,7 @@ class ChessBoardWidget(QWidget):
                 self.main_window.show_alert("Select a valid piece!")
         self.update()
 
-# ------------------- Main UI -------------------
+
 # ------------------- Main UI -------------------
 class ChessUI(QMainWindow):
     WIDTH = 800
@@ -99,13 +102,14 @@ class ChessUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("Python Chess")
         self.gs = GameState()
-        self.singleplayer = False  # default 2-player
+        self.singleplayer = False
         self.undo_stack = []
         self.redo_stack = []
         self.init_pygame_sounds()
         self.init_ui()
         self.show()
 
+    # ---------- UI ----------
     def init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -153,7 +157,7 @@ class ChessUI(QMainWindow):
         """)
         layout.addWidget(btn)
 
-    # ---------------- Sounds ----------------
+    # ---------- Sounds ----------
     def init_pygame_sounds(self):
         pygame.mixer.init()
         if os.path.exists("sounds/bg_music.mp3"):
@@ -169,7 +173,7 @@ class ChessUI(QMainWindow):
         elif self.move_sound:
             self.move_sound.play()
 
-    # ---------------- Controls ----------------
+    # ---------- Controls ----------
     def update_turn_message(self):
         if self.gs.whiteToMove:
             self.message_label.setText("White's Turn")
@@ -179,19 +183,18 @@ class ChessUI(QMainWindow):
     def show_alert(self, msg):
         self.message_label.setText(msg)
 
-    # ---------------- Undo / Redo ----------------
+    # ---------- Undo / Redo ----------
     def undo_move(self):
         if self.undo_stack:
             move = self.undo_stack.pop()
             self.gs.undoMove()
             self.redo_stack.append(move)
 
-            # If single-player and AI move was just undone, undo AI too
-            if self.singleplayer and not self.gs.whiteToMove:
-                if self.undo_stack:
-                    ai_move = self.undo_stack.pop()
-                    self.gs.undoMove()
-                    self.redo_stack.append(ai_move)
+            # Single-player undo: also undo AI move
+            if self.singleplayer and not self.gs.whiteToMove and self.undo_stack:
+                ai_move = self.undo_stack.pop()
+                self.gs.undoMove()
+                self.redo_stack.append(ai_move)
 
             self.board_widget.valid_moves = self.gs.getValidMoves()
             self.board_widget.selected_sq = None
@@ -199,28 +202,25 @@ class ChessUI(QMainWindow):
             self.board_widget.update()
             self.update_turn_message()
 
-
     def redo_move(self):
         if self.redo_stack:
             move = self.redo_stack.pop()
-        self.gs.makeMove(move)
-        self.undo_stack.append(move)
+            self.gs.makeMove(move)
+            self.undo_stack.append(move)
 
-        # If single-player and AI move was redone, redo AI too
-        if self.singleplayer and not self.gs.whiteToMove:
-            if self.redo_stack:
+            # Single-player redo: also redo AI move
+            if self.singleplayer and not self.gs.whiteToMove and self.redo_stack:
                 ai_move = self.redo_stack.pop()
                 self.gs.makeMove(ai_move)
                 self.undo_stack.append(ai_move)
 
-        self.board_widget.valid_moves = self.gs.getValidMoves()
-        self.board_widget.selected_sq = None
-        self.board_widget.move_highlight.clear()
-        self.board_widget.update()
-        self.update_turn_message()
+            self.board_widget.valid_moves = self.gs.getValidMoves()
+            self.board_widget.selected_sq = None
+            self.board_widget.move_highlight.clear()
+            self.board_widget.update()
+            self.update_turn_message()
 
-
-    # ---------------- Restart / Singleplayer ----------------
+    # ---------- Restart / Singleplayer ----------
     def restart_game(self):
         self.gs.__init__()
         self.board_widget.selected_sq = None
@@ -237,7 +237,7 @@ class ChessUI(QMainWindow):
         self.restart_game()
         self.show_alert("Single Player Mode: You play White")
 
-    # ---------------- Simple AI ----------------
+    # ---------- Simple AI ----------
     def ai_move(self):
         moves = self.gs.getValidMoves()
         if moves:
