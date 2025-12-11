@@ -34,64 +34,83 @@ class ChessBoardWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        # Board colors
         colors = [QColor(60,60,60), QColor(200,200,200)]
         for r in range(self.DIMENSION):
             for c in range(self.DIMENSION):
                 painter.fillRect(c*self.SQUARE_SIZE, r*self.SQUARE_SIZE,
                                  self.SQUARE_SIZE, self.SQUARE_SIZE,
                                  colors[(r+c)%2])
-        # Highlights
+        # draw highlights (available moves)
         for sq in self.move_highlight:
             painter.fillRect(sq[1]*self.SQUARE_SIZE, sq[0]*self.SQUARE_SIZE,
                              self.SQUARE_SIZE, self.SQUARE_SIZE,
                              QColor(246,246,105,150))
-        # Selected square
+        # draw selected square overlay
         if self.selected_sq:
             painter.fillRect(self.selected_sq[1]*self.SQUARE_SIZE, self.selected_sq[0]*self.SQUARE_SIZE,
                              self.SQUARE_SIZE, self.SQUARE_SIZE,
                              QColor(180,180,50,150))
-        # Pieces
+        # draw pieces (only if image loaded)
         for r in range(self.DIMENSION):
             for c in range(self.DIMENSION):
                 piece = self.gs.board[r][c]
-                if piece != "--":
+                if piece != "--" and piece in self.piece_images:
                     painter.drawPixmap(c*self.SQUARE_SIZE, r*self.SQUARE_SIZE,
                                        self.piece_images[piece])
 
     def mousePressEvent(self, event):
+        # get board coordinates
         row = int(event.position().y()) // self.SQUARE_SIZE
         col = int(event.position().x()) // self.SQUARE_SIZE
+
+        # bounds check (safe)
+        if row < 0 or row >= self.DIMENSION or col < 0 or col >= self.DIMENSION:
+            return
+
         piece = self.gs.board[row][col]
 
         if self.selected_sq:
             target = (row, col)
             move = Move(self.selected_sq, target, self.gs.board)
+            # check in current move list
             if move in self.valid_moves:
+                # make the move
                 self.gs.makeMove(move)
-                self.main_window.undo_stack.append(move)  # push to undo stack
-                self.main_window.redo_stack.clear()       # clear redo stack
+                self.main_window.undo_stack.append(move)
+                self.main_window.redo_stack.clear()
+
+                # clear selection & highlights
                 self.selected_sq = None
                 self.move_highlight.clear()
+
+                # update local valid_moves from engine
                 self.valid_moves = self.gs.getValidMoves()
+
+                # play sound & update UI
                 self.main_window.play_move_sound(capture=move.pieceCaptured != "--")
                 self.main_window.update_turn_message()
 
-                # If single-player and AI turn
-                if self.main_window.singleplayer and not self.gs.whiteToMove:
-                    QTimer.singleShot(500, self.main_window.ai_move)
+                # if singleplayer is ON, detect if now it's AI's turn and schedule it
+                if self.main_window.singleplayer:
+                    ai_turn = (self.gs.whiteToMove and self.main_window.ai_plays_white) \
+                            or (not self.gs.whiteToMove and not self.main_window.ai_plays_white)
+                    if ai_turn:
+                        # schedule AI a little later so GUI refreshes
+                        QTimer.singleShot(200, self.main_window.ai_move)
+
             else:
                 self.main_window.show_alert("Invalid move!")
                 self.selected_sq = None
                 self.move_highlight.clear()
         else:
+            # select a piece if it belongs to current player
             if piece != "--" and ((piece[0]=='w' and self.gs.whiteToMove) or (piece[0]=='b' and not self.gs.whiteToMove)):
                 self.selected_sq = (row, col)
+                # build highlight list (endRow, endCol) for moves starting from this square
                 self.move_highlight = [(m.endRow, m.endCol) for m in self.valid_moves if m.startRow==row and m.startCol==col]
             else:
                 self.main_window.show_alert("Select a valid piece!")
         self.update()
-
 
 # ------------------- Main UI -------------------
 class ChessUI(QMainWindow):
@@ -102,9 +121,18 @@ class ChessUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("Python Chess")
         self.gs = GameState()
+
+        # game / ai settings
         self.singleplayer = False
+        self.ai_level = None            # 'Easy' / 'Medium' / 'Hard' / 'Grandmaster'
+        self.ai_plays_white = False     # whether AI plays white (if False, AI plays black)
+        self.ai_player_side = 'black'
+
+        # undo/redo stacks
         self.undo_stack = []
         self.redo_stack = []
+
+        # initialize audio and UI
         self.init_pygame_sounds()
         self.init_ui()
         self.show()
@@ -159,11 +187,17 @@ class ChessUI(QMainWindow):
 
     # ---------- Sounds ----------
     def init_pygame_sounds(self):
-        pygame.mixer.init()
+        try:
+            pygame.mixer.init()
+        except Exception:
+            pass
         if os.path.exists("sounds/bg_music.mp3"):
-            pygame.mixer.music.load("sounds/bg_music.mp3")
-            pygame.mixer.music.set_volume(0.3)
-            pygame.mixer.music.play(-1)
+            try:
+                pygame.mixer.music.load("sounds/bg_music.mp3")
+                pygame.mixer.music.set_volume(0.3)
+                pygame.mixer.music.play(-1)
+            except Exception:
+                pass
         self.move_sound = pygame.mixer.Sound("sounds/move.wav") if os.path.exists("sounds/move.wav") else None
         self.capture_sound = pygame.mixer.Sound("sounds/capture.wav") if os.path.exists("sounds/capture.wav") else None
 
@@ -190,7 +224,7 @@ class ChessUI(QMainWindow):
             self.gs.undoMove()
             self.redo_stack.append(move)
 
-            # Single-player undo: also undo AI move
+            # if playing vs AI, undo the AI's last move too (if available)
             if self.singleplayer and not self.gs.whiteToMove and self.undo_stack:
                 ai_move = self.undo_stack.pop()
                 self.gs.undoMove()
@@ -208,7 +242,7 @@ class ChessUI(QMainWindow):
             self.gs.makeMove(move)
             self.undo_stack.append(move)
 
-            # Single-player redo: also redo AI move
+            # if singleplayer, redo AI's move too if available
             if self.singleplayer and not self.gs.whiteToMove and self.redo_stack:
                 ai_move = self.redo_stack.pop()
                 self.gs.makeMove(ai_move)
@@ -220,7 +254,7 @@ class ChessUI(QMainWindow):
             self.board_widget.update()
             self.update_turn_message()
 
-    # ---------- Restart / Singleplayer ----------
+    # ---------- Restart ----------
     def restart_game(self):
         self.gs.__init__()
         self.board_widget.selected_sq = None
@@ -231,24 +265,161 @@ class ChessUI(QMainWindow):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.singleplayer = False
+        self.ai_level = None
 
+    # ---------- Singleplayer / Difficulty ----------
+        # ---------- Singleplayer Mode ----------
     def enable_singleplayer(self):
         self.singleplayer = True
+        self.show_alert("Single Player: Select AI Side")
+
+        sidebar = self.centralWidget().layout().itemAt(1).layout()
+
+        # Clear old difficulty buttons (if user presses again)
+        for i in reversed(range(sidebar.count())):
+            item = sidebar.itemAt(i)
+            w = item.widget()
+            if isinstance(w, QPushButton) and w.text() in ["AI = White", "AI = Black", "Easy", "Medium", "Hard", "Grandmaster"]:
+                sidebar.removeWidget(w)
+                w.deleteLater()
+
+        # Side selection
+        label = QLabel("AI plays as:")
+        label.setStyleSheet("color:white;")
+        sidebar.addWidget(label)
+
+        btn_white = QPushButton("AI = White")
+        btn_black = QPushButton("AI = Black")
+
+        for b in (btn_white, btn_black):
+            b.setStyleSheet("background-color:#555;color:white;border-radius:5px;padding:3px;")
+
+        btn_white.clicked.connect(lambda: self.set_ai_side("white"))
+        btn_black.clicked.connect(lambda: self.set_ai_side("black"))
+
+        sidebar.addWidget(btn_white)
+        sidebar.addWidget(btn_black)
+
+    def set_ai_side(self, side):
+        self.ai_plays_white = (side == "white")
+        self.show_alert(f"AI will play as {side.capitalize()}. Select difficulty now.")
+
+        sidebar = self.centralWidget().layout().itemAt(1).layout()
+
+        difficulties = ["Easy", "Medium", "Hard", "Grandmaster"]
+        for level in difficulties:
+            btn = QPushButton(level)
+            btn.setStyleSheet("background-color:#555;color:white;border-radius:5px;padding:3px;")
+            btn.clicked.connect(lambda checked, l=level: self.set_ai_difficulty(l))
+            sidebar.addWidget(btn)
+
+    def set_ai_difficulty(self, level):
+        self.ai_level = level
+        self.show_alert(f"Difficulty: {level}. Game starting...")
+
+        # Only restart after side + difficulty are set
         self.restart_game()
-        self.show_alert("Single Player Mode: You play White")
 
-    # ---------- Simple AI ----------
+        # If AI plays white, make AI move immediately
+        if self.singleplayer and self.ai_plays_white:
+            QTimer.singleShot(500, self.ai_move)
+
+
+    def set_ai_difficulty(self, level):
+        self.ai_level = level
+        self.show_alert(f"AI Difficulty set to {level}")
+        # remove difficulty buttons after selection
+        if hasattr(self, 'difficulty_buttons'):
+            for btn in self.difficulty_buttons:
+                btn.setParent(None)
+            del self.difficulty_buttons
+
+    # ---------- AI ----------
     def ai_move(self):
-        moves = self.gs.getValidMoves()
-        if moves:
-            move = random.choice(moves)
-            self.gs.makeMove(move)
-            self.undo_stack.append(move)
-            self.play_move_sound(capture=move.pieceCaptured != "--")
-            self.board_widget.valid_moves = self.gs.getValidMoves()
-            self.board_widget.update()
-            self.update_turn_message()
+        # debug: uncomment to see calls in console
+        # print("ai_move called; whiteToMove:", self.gs.whiteToMove, "ai_plays_white:", self.ai_plays_white)
 
+        moves = self.gs.getValidMoves()
+        if not moves:
+            return
+
+        # choose move by difficulty
+        if self.ai_level == 'Easy':
+            move = random.choice(moves)
+        elif self.ai_level == 'Medium':
+            move = self.minimax_move(depth=1)
+        elif self.ai_level == 'Hard':
+            move = self.minimax_move(depth=2)
+        elif self.ai_level == 'Grandmaster':
+            move = self.minimax_move(depth=3)
+        else:
+            move = random.choice(moves)
+
+        # perform AI move and update UI
+        self.gs.makeMove(move)
+        self.undo_stack.append(move)
+        self.play_move_sound(capture=move.pieceCaptured != "--")
+        self.board_widget.valid_moves = self.gs.getValidMoves()
+        self.board_widget.update()
+        self.update_turn_message()
+
+    # ---------- Minimax ----------
+    def minimax_move(self, depth):
+        moves = self.gs.getValidMoves()
+        best_move = None
+        if self.gs.whiteToMove:
+            max_score = -float('inf')
+            for move in moves:
+                self.gs.makeMove(move)
+                score = self.minimax(depth-1, False)
+                self.gs.undoMove()
+                if score > max_score:
+                    max_score = score
+                    best_move = move
+        else:
+            min_score = float('inf')
+            for move in moves:
+                self.gs.makeMove(move)
+                score = self.minimax(depth-1, True)
+                self.gs.undoMove()
+                if score < min_score:
+                    min_score = score
+                    best_move = move
+        return best_move
+
+    def minimax(self, depth, is_maximizing):
+        if depth == 0:
+            return self.evaluate_board()
+        moves = self.gs.getValidMoves()
+        if is_maximizing:
+            max_score = -float('inf')
+            for move in moves:
+                self.gs.makeMove(move)
+                score = self.minimax(depth-1, False)
+                self.gs.undoMove()
+                max_score = max(max_score, score)
+            return max_score
+        else:
+            min_score = float('inf')
+            for move in moves:
+                self.gs.makeMove(move)
+                score = self.minimax(depth-1, True)
+                self.gs.undoMove()
+                min_score = min(min_score, score)
+            return min_score
+
+    def evaluate_board(self):
+        piece_values = {'P':1, 'N':3, 'B':3, 'R':5, 'Q':9, 'K':0}
+        score = 0
+        for row in self.gs.board:
+            for piece in row:
+                if piece != "--":
+                    value = piece_values[piece[1]]
+                    if piece[0] == 'w':
+                        score += value
+                    else:
+                        score -= value
+        return score
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
