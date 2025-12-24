@@ -1,27 +1,28 @@
-# Chess
-This is a project i've received. I use python along with some libraries. Again this is just a basic code for Chess.
-Python Chess Game ♟️
+# Python Chess Game
 
-A 2-player local chess game built in Python using Pygame, featuring move validation, piece highlighting, undo functionality, and smooth graphics.
+## How to Add Assets
 
-This project separates game logic (chessengine.py) from the GUI (chessmain.py).
+- Place chess piece images in `assets/images/`.
+  - Name them as `wK.png`, `wQ.png`, `wR.png`, `wB.png`, `wN.png`, `wP.png` for white pieces, and `bK.png`, `bQ.png`, `bR.png`, `bB.png`, `bN.png`, `bP.png` for black pieces.
+  - Board tile images can also be added for custom themes (optional).
+- Place sound effects in `assets/sounds/`.
+  - Use `move.wav`, `capture.wav`, `check.wav`, `checkmate.wav`, `invalid.wav` for respective events.
 
-🎮 Features
+## Running the Game
 
-Two-player local mode (play on the same computer)
+1. Install dependencies:
+   - `pip install pygame PyQt5`
+2. Run the game:
+   - `python chessmain.py`
 
-Highlight selected pieces and possible moves
+## Features
+- Single-player (vs AI) and multiplayer
+- Modern/classic themes, dark/light modes
+- Sound effects, move highlighting, animations
+- Chess clock, move history, undo, notifications
+- Settings menu (PyQt5)
 
-Valid move enforcement (basic chess rules)
-
-Undo last move using the Z key
-
-Smooth rendering of pieces and board
-
-🗂 Project Structure
-Chess/
-│
-├── images/            # Chess piece images (wP.png, wK.png, bQ.png, etc.)
-├── chessengine.py     # Game logic: board, moves, rules
-├── chessmain.py       # Pygame GUI & game loop
-└── README.md          # Project documentation
+## Notes
+- All logic is in `chessengine.py`.
+- All UI and input is in `chessmain.py`.
+- All assets must be placed in the `assets/` folder as described above.

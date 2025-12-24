@@ -1,428 +1,445 @@
-import sys, os, random
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
-    QHBoxLayout
-)
-from PyQt6.QtGui import QPainter, QColor, QPixmap, QFont
-from PyQt6.QtCore import Qt, QTimer
+def handle_click(self, pos):
+        for i, rect in enumerate(self.rects):
+            if rect.collidepoint(pos):
+                return self.options[i]
+        return None
+"""
+chessmain.py
+
+Handles UI, graphics, input, and sound using pygame and PyQt5.
+
+Features:
+- Single-player (vs AI) and multiplayer
+- Board rendering, animations, move highlighting
+- Menus/settings with PyQt5
+- Sound effects for moves, captures, check, checkmate, invalid
+- Move history, chess clock, undo, notifications
+- Theme and fullscreen options
+- Loads assets from assets/images and assets/sounds
+
+"""
+
+import sys
+import os
 import pygame
+from PyQt5 import QtWidgets, QtCore
+from chessengine import ChessEngine
 
-from chessengine import GameState, Move  # your existing engine
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), 'assets')
+IMAGES_DIR = os.path.join(ASSETS_DIR, 'images')
+SOUNDS_DIR = os.path.join(ASSETS_DIR, 'sounds')
 
-# ------------------- Chess Board Widget -------------------
-class ChessBoardWidget(QWidget):
-    DIMENSION = 8
-    SQUARE_SIZE = 70
-
-    def __init__(self, gs, main_window, parent=None):
+# --- PyQt5 Settings Dialog ---
+class SettingsDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
-        self.gs = gs
-        self.main_window = main_window
-        self.selected_sq = None
-        self.valid_moves = self.gs.getValidMoves()
-        self.piece_images = {}
-        self.move_highlight = []
-        self.load_images()
-        self.setFixedSize(self.DIMENSION*self.SQUARE_SIZE, self.DIMENSION*self.SQUARE_SIZE)
+        self.setWindowTitle('Settings')
+        self.settings = settings or {}
+        layout = QtWidgets.QVBoxLayout()
+        self.sound_cb = QtWidgets.QCheckBox('Enable Sounds')
+        self.sound_cb.setChecked(self.settings.get('sound', True))
+        self.theme_cb = QtWidgets.QComboBox()
+        self.theme_cb.addItems(['Modern Light', 'Modern Dark', 'Classic', 'Dark', 'Cream', 'Calm', 'Stormy'])
+        self.theme_cb.setCurrentIndex(self.settings.get('theme', 0))
+        self.highlight_cb = QtWidgets.QCheckBox('Highlight Moves')
+        self.highlight_cb.setChecked(self.settings.get('highlight', True))
+        self.fullscreen_cb = QtWidgets.QCheckBox('Fullscreen')
+        self.fullscreen_cb.setChecked(self.settings.get('fullscreen', False))
+        layout.addWidget(self.sound_cb)
+        layout.addWidget(QtWidgets.QLabel('Theme:'))
+        layout.addWidget(self.theme_cb)
+        layout.addWidget(self.highlight_cb)
+        layout.addWidget(self.fullscreen_cb)
+        btns = QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        self.buttonBox = QtWidgets.QDialogButtonBox(btns)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+        layout.addWidget(self.buttonBox)
+        self.setLayout(layout)
+    def get_settings(self):
+        return {
+            'sound': self.sound_cb.isChecked(),
+            'theme': self.theme_cb.currentIndex(),
+            'highlight': self.highlight_cb.isChecked(),
+            'fullscreen': self.fullscreen_cb.isChecked()
+        }
 
-    def load_images(self):
-        pieces = ['wP','wR','wN','wB','wQ','wK','bP','bR','bN','bB','bQ','bK']
-        for piece in pieces:
-            path = os.path.join("images", f"{piece}.png")
-            if os.path.exists(path):
-                self.piece_images[piece] = QPixmap(path).scaled(self.SQUARE_SIZE, self.SQUARE_SIZE)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        colors = [QColor(60,60,60), QColor(200,200,200)]
-        for r in range(self.DIMENSION):
-            for c in range(self.DIMENSION):
-                painter.fillRect(c*self.SQUARE_SIZE, r*self.SQUARE_SIZE,
-                                 self.SQUARE_SIZE, self.SQUARE_SIZE,
-                                 colors[(r+c)%2])
-        # draw highlights (available moves)
-        for sq in self.move_highlight:
-            painter.fillRect(sq[1]*self.SQUARE_SIZE, sq[0]*self.SQUARE_SIZE,
-                             self.SQUARE_SIZE, self.SQUARE_SIZE,
-                             QColor(246,246,105,150))
-        # draw selected square overlay
-        if self.selected_sq:
-            painter.fillRect(self.selected_sq[1]*self.SQUARE_SIZE, self.selected_sq[0]*self.SQUARE_SIZE,
-                             self.SQUARE_SIZE, self.SQUARE_SIZE,
-                             QColor(180,180,50,150))
-        # draw pieces (only if image loaded)
-        for r in range(self.DIMENSION):
-            for c in range(self.DIMENSION):
-                piece = self.gs.board[r][c]
-                if piece != "--" and piece in self.piece_images:
-                    painter.drawPixmap(c*self.SQUARE_SIZE, r*self.SQUARE_SIZE,
-                                       self.piece_images[piece])
-
-    def mousePressEvent(self, event):
-        # get board coordinates
-        row = int(event.position().y()) // self.SQUARE_SIZE
-        col = int(event.position().x()) // self.SQUARE_SIZE
-
-        # bounds check (safe)
-        if row < 0 or row >= self.DIMENSION or col < 0 or col >= self.DIMENSION:
-            return
-
-        piece = self.gs.board[row][col]
-
-        if self.selected_sq:
-            target = (row, col)
-            move = Move(self.selected_sq, target, self.gs.board)
-            # check in current move list
-            if move in self.valid_moves:
-                # make the move
-                self.gs.makeMove(move)
-                self.main_window.undo_stack.append(move)
-                self.main_window.redo_stack.clear()
-
-                # clear selection & highlights
-                self.selected_sq = None
-                self.move_highlight.clear()
-
-                # update local valid_moves from engine
-                self.valid_moves = self.gs.getValidMoves()
-
-                # play sound & update UI
-                self.main_window.play_move_sound(capture=move.pieceCaptured != "--")
-                self.main_window.update_turn_message()
-
-                # if singleplayer is ON, detect if now it's AI's turn and schedule it
-                if self.main_window.singleplayer:
-                    ai_turn = (self.gs.whiteToMove and self.main_window.ai_plays_white) \
-                            or (not self.gs.whiteToMove and not self.main_window.ai_plays_white)
-                    if ai_turn:
-                        # schedule AI a little later so GUI refreshes
-                        QTimer.singleShot(200, self.main_window.ai_move)
-
-            else:
-                self.main_window.show_alert("Invalid move!")
-                self.selected_sq = None
-                self.move_highlight.clear()
-        else:
-            # select a piece if it belongs to current player
-            if piece != "--" and ((piece[0]=='w' and self.gs.whiteToMove) or (piece[0]=='b' and not self.gs.whiteToMove)):
-                self.selected_sq = (row, col)
-                # build highlight list (endRow, endCol) for moves starting from this square
-                self.move_highlight = [(m.endRow, m.endCol) for m in self.valid_moves if m.startRow==row and m.startCol==col]
-            else:
-                self.main_window.show_alert("Select a valid piece!")
-        self.update()
-
-# ------------------- Main UI -------------------
-class ChessUI(QMainWindow):
-    WIDTH = 800
-    HEIGHT = 600
-
+# --- Main Chess Game ---
+class ChessGame:
+    def animate_move(self, move):
+            # Simple animation: slide piece from start to end
+            sr, sc = move.start
+            er, ec = move.end
+            img = self.images.get(f'{move.piece[1]}{move.piece[0]}')
+            if not img:
+                return
+            frames = 10
+            for i in range(1, frames+1):
+                self.draw()
+                x = sc*100 + (ec-sc)*100*i//frames + 50
+                y = sr*100 + (er-sr)*100*i//frames + 50
+                rect = img.get_rect(center=(x, y))
+                self.screen.blit(img, rect)
+                pygame.display.flip()
+                pygame.time.delay(15)
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Python Chess")
-        self.gs = GameState()
-
-        # game / ai settings
-        self.singleplayer = False
-        self.ai_level = None            # 'Easy' / 'Medium' / 'Hard' / 'Grandmaster'
-        self.ai_plays_white = False     # whether AI plays white (if False, AI plays black)
-        self.ai_player_side = 'black'
-
-        # undo/redo stacks
-        self.undo_stack = []
-        self.redo_stack = []
-
-        # initialize audio and UI
-        self.init_pygame_sounds()
-        self.init_ui()
-        self.show()
-
-    # ---------- UI ----------
-    def init_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        h_layout = QHBoxLayout()
-        central_widget.setLayout(h_layout)
-
-        # Chessboard
-        self.board_widget = ChessBoardWidget(self.gs, main_window=self)
-        h_layout.addWidget(self.board_widget)
-
-        # Sidebar
-        sidebar = QVBoxLayout()
-        h_layout.addLayout(sidebar)
-
-        self.message_label = QLabel("White's Turn")
-        self.message_label.setFont(QFont("Arial", 14))
-        self.message_label.setStyleSheet("color: white;")
-        sidebar.addWidget(self.message_label)
-
-        # Buttons
-        self.add_button(sidebar, "Undo", self.undo_move)
-        self.add_button(sidebar, "Redo", self.redo_move)
-        self.add_button(sidebar, "Restart", self.restart_game)
-        self.add_button(sidebar, "Single Player", self.enable_singleplayer)
-        self.add_button(sidebar, "Quit", self.close)
-
-        sidebar.addStretch()
-        central_widget.setStyleSheet("background-color: #1e1e1e;")
-
-    def add_button(self, layout, text, callback):
-        btn = QPushButton(text)
-        btn.clicked.connect(callback)
-        btn.setStyleSheet("""
-            QPushButton {
-                background-color: #333;
-                color: white;
-                font-size: 14px;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QPushButton:hover {
-                background-color: white;
-                color: black;
-            }
-        """)
-        layout.addWidget(btn)
-
-    # ---------- Sounds ----------
-    def init_pygame_sounds(self):
-        try:
-            pygame.mixer.init()
-        except Exception:
-            pass
-        if os.path.exists("sounds/bg_music.mp3"):
+        pygame.init()
+        self.settings = {'sound': True, 'theme': 0, 'highlight': True, 'fullscreen': False}
+        self.screen = pygame.display.set_mode((800, 800), pygame.RESIZABLE)
+        pygame.display.set_caption('Python Chess')
+        self.clock = pygame.time.Clock()
+        self.engine = ChessEngine()
+        self.selected = None
+        self.valid_moves = []
+        self.move_history = []
+        self.running = True
+        self.load_assets()
+        self.sounds = self.load_sounds()
+        self.font = pygame.font.SysFont('Arial', 24)
+        self.ai_enabled = True
+        self.ai_difficulty = 2
+        self.move_highlight = True
+        self.fullscreen = False
+        self.turn = 'w'
+        self.chess_clock = [900, 900]  # 15 min per player
+        self.clock_running = [True, True]
+        self.last_time = pygame.time.get_ticks()
+        self.notification = ''
+        self.music_playing = False
+        self.play_music()
+    def play_music(self):
+        # Play background music if available
+        music_path = os.path.join(SOUNDS_DIR, 'bg_music.mp3')
+        if os.path.exists(music_path):
             try:
-                pygame.mixer.music.load("sounds/bg_music.mp3")
+                pygame.mixer.music.load(music_path)
                 pygame.mixer.music.set_volume(0.3)
                 pygame.mixer.music.play(-1)
-            except Exception:
-                pass
-        self.move_sound = pygame.mixer.Sound("sounds/move.wav") if os.path.exists("sounds/move.wav") else None
-        self.capture_sound = pygame.mixer.Sound("sounds/capture.wav") if os.path.exists("sounds/capture.wav") else None
+                self.music_playing = True
+            except Exception as e:
+                print(f"Music error: {e}")
 
-    def play_move_sound(self, capture=False):
-        if capture and self.capture_sound:
-            self.capture_sound.play()
-        elif self.move_sound:
-            self.move_sound.play()
+    def load_assets(self):
+        self.images = {}
+        for color in ['w', 'b']:
+            for piece in ['K','Q','R','B','N','P']:
+                path = os.path.join(IMAGES_DIR, f'{color}{piece}.png')
+                if os.path.exists(path):
+                    self.images[f'{color}{piece}'] = pygame.image.load(path)
+                else:
+                    self.images[f'{color}{piece}'] = pygame.Surface((80,80))
+                    self.images[f'{color}{piece}'].fill((200,200,200) if color=='w' else (50,50,50))
 
-    # ---------- Controls ----------
-    def update_turn_message(self):
-        if self.gs.whiteToMove:
-            self.message_label.setText("White's Turn")
+    def load_sounds(self):
+        sounds = {}
+        for name in ['move','capture','check','checkmate','invalid']:
+            path = os.path.join(SOUNDS_DIR, f'{name}.wav')
+            if os.path.exists(path):
+                sounds[name] = pygame.mixer.Sound(path)
+            else:
+                sounds[name] = None
+        return sounds
+
+    def play_sound(self, name):
+        if self.settings['sound'] and self.sounds.get(name):
+            self.sounds[name].play()
+
+    def run(self, rotate_board=False):
+        self.rotate_board = rotate_board
+        self.navbar = Navbar(self.screen, ['Menu', 'Undo', 'Settings', 'Exit'])
+        while self.running:
+            self.handle_events()
+            self.update()
+            self.draw()
+            self.navbar.draw()
+            pygame.display.flip()
+            self.clock.tick(60)
+
+    def handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.running = False
+                elif event.key == pygame.K_f:
+                    self.toggle_fullscreen()
+                elif event.key == pygame.K_u:
+                    self.engine.undo_move()
+                    self.play_sound('move')
+                elif event.key == pygame.K_s:
+                    self.show_settings()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # Check navbar first
+                if self.navbar:
+                    nav_action = self.navbar.handle_click(event.pos)
+                    if nav_action == 'Exit':
+                        self.running = False
+                        return
+                    elif nav_action == 'Undo':
+                        self.engine.undo_move()
+                        self.play_sound('move')
+                        return
+                    elif nav_action == 'Settings':
+                        self.show_settings()
+                        return
+                    elif nav_action == 'Menu':
+                        self.running = False
+                        return
+                self.handle_click(event.pos)
+
+    def handle_click(self, pos):
+        x, y = pos
+        row, col = y // 100, x // 100
+        if self.selected:
+            # Only allow moves for the selected piece
+            piece_moves = [m for m in self.engine.get_valid_moves() if m.start == self.selected]
+            for move in piece_moves:
+                if move.end == (row, col):
+                    self.animate_move(move)
+                    self.engine.make_move(move)
+                    self.play_sound('move')
+                    self.selected = None
+                    self.valid_moves = []
+                    return
+            self.selected = None
+            self.valid_moves = []
         else:
-            self.message_label.setText("Black's Turn")
+            piece = self.engine.board[row][col]
+            if piece and ((piece[1] == 'w' and self.engine.white_to_move) or (piece[1] == 'b' and not self.engine.white_to_move)):
+                self.selected = (row, col)
+                # Only show moves for this piece
+                self.valid_moves = [m for m in self.engine.get_valid_moves() if m.start == (row, col)]
 
-    def show_alert(self, msg):
-        self.message_label.setText(msg)
+    def update(self):
+        # Check for checkmate
+        if self.engine.is_checkmate(True):
+            self.show_game_over('Black wins by checkmate!')
+            self.running = False
+        elif self.engine.is_checkmate(False):
+            self.show_game_over('White wins by checkmate!')
+            self.running = False
+        # AI move with delay
+        if self.ai_enabled and ((self.engine.white_to_move and self.turn=='w') or (not self.engine.white_to_move and self.turn=='b')):
+            import random
+            if not hasattr(self, '_ai_wait') or self._ai_wait is None:
+                self._ai_wait = pygame.time.get_ticks() + random.randint(1000, 4000)
+            if pygame.time.get_ticks() >= self._ai_wait:
+                move = self.engine.get_ai_move(self.ai_difficulty)
+                if move:
+                    self.animate_move(move)
+                    self.engine.make_move(move)
+                    self.play_sound('move')
+                self._ai_wait = None
 
-    # ---------- Undo / Redo ----------
-    def undo_move(self):
-        if self.undo_stack:
-            move = self.undo_stack.pop()
-            self.gs.undoMove()
-            self.redo_stack.append(move)
+    def draw(self):
+        # Theme colors
+        themes = [
+            {'bg': (240,240,240), 'light': (232,235,239), 'dark': (125,135,150)}, # Modern Light
+            {'bg': (30,30,30), 'light': (80,80,80), 'dark': (50,50,50)}, # Modern Dark
+            {'bg': (245,245,220), 'light': (255,255,240), 'dark': (205,133,63)}, # Classic
+            {'bg': (20,20,20), 'light': (60,60,60), 'dark': (30,30,30)}, # Dark
+            {'bg': (255,253,208), 'light': (255,255,240), 'dark': (210,180,140)}, # Cream
+            {'bg': (200,220,230), 'light': (220,240,250), 'dark': (100,120,140)}, # Calm
+            {'bg': (60,70,90), 'light': (120,130,150), 'dark': (40,50,70)}, # Stormy
+        ]
+        theme = themes[self.settings.get('theme',0)]
+        self.screen.fill(theme['bg'])
+        # Find king in check
+        king_in_check = None
+        for color, is_white in [('w', True), ('b', False)]:
+            if self.engine.is_check(is_white):
+                # Find king position
+                for r in range(8):
+                    for c in range(8):
+                        piece = self.engine.board[r][c]
+                        if piece and piece[0] == 'K' and piece[1] == color:
+                            king_in_check = (r, c)
+        # Draw board
+        for r in range(8):
+            for c in range(8):
+                color = theme['dark'] if (r+c)%2==0 else theme['light']
+                rect = pygame.Rect(c*100, r*100, 100, 100)
+                # Highlight king in check
+                if king_in_check == (r, c):
+                    pygame.draw.rect(self.screen, (255,0,0), rect)
+                else:
+                    pygame.draw.rect(self.screen, color, rect)
+                piece = self.engine.board[r][c]
+                if piece:
+                    img = self.images.get(f'{piece[1]}{piece[0]}')
+                    if img:
+                        # Center the piece in the square
+                        rect_img = img.get_rect(center=(c*100+50, r*100+50))
+                        self.screen.blit(img, rect_img)
+        for r in range(8):
+            for c in range(8):
+                draw_r, draw_c = r, c
+                if getattr(self, 'rotate_board', False) and not self.engine.white_to_move:
+                    draw_r, draw_c = 7 - r, 7 - c
+                color = theme['dark'] if (draw_r+draw_c)%2==0 else theme['light']
+                rect = pygame.Rect(draw_c*100, draw_r*100, 100, 100)
+                # Highlight king in check
+                if king_in_check == (r, c):
+                    pygame.draw.rect(self.screen, (255,0,0), rect)
+                else:
+                    pygame.draw.rect(self.screen, color, rect)
+                piece = self.engine.board[r][c]
+                if piece:
+                    img = self.images.get(f'{piece[1]}{piece[0]}')
+                    if img:
+                        # Center the piece in the square
+                        rect_img = img.get_rect(center=(draw_c*100+50, draw_r*100+50))
+                        self.screen.blit(img, rect_img)
+        # Highlight
+        if self.settings['highlight'] and self.selected:
+            for move in self.valid_moves:
+                highlight_color = (255, 247, 200)  # yellowish creamy
+                if move.is_castle or move.is_en_passant or move.promotion:
+                    highlight_color = (220, 240, 255)  # blueish white
+                rect = pygame.Rect(move.end[1]*100, move.end[0]*100, 100, 100)
+                pygame.draw.rect(self.screen, highlight_color, rect, border_radius=18)
+        if self.settings['highlight'] and self.selected:
+            for move in self.valid_moves:
+                highlight_color = (255, 247, 200)  # yellowish creamy
+                if move.is_castle or move.is_en_passant or move.promotion:
+                    highlight_color = (220, 240, 255)  # blueish white
+                end_r, end_c = move.end
+                draw_r, draw_c = end_r, end_c
+                if getattr(self, 'rotate_board', False) and not self.engine.white_to_move:
+                    draw_r, draw_c = 7 - end_r, 7 - end_c
+                rect = pygame.Rect(draw_c*100, draw_r*100, 100, 100)
+                pygame.draw.rect(self.screen, highlight_color, rect, border_radius=18)
+        # Notification
+        if self.notification:
+            notif = self.font.render(self.notification, True, (255,0,0))
+            self.screen.blit(notif, (10, 760))
+class Navbar:
+    def __init__(self, surface, options):
+        self.surface = surface
+        self.options = options
+        self.font = pygame.font.SysFont('Arial', 22, bold=True)
+        self.rects = []
+    def draw(self):
+        self.rects = []
+        x = 0
+        for opt in self.options:
+            rect = pygame.Rect(x, 0, 140, 40)
+            pygame.draw.rect(self.surface, (57,62,70), rect)
+            pygame.draw.rect(self.surface, (255,211,105), rect, 2)
+            label = self.font.render(opt, True, (255,255,255))
+            label_rect = label.get_rect(center=rect.center)
+            self.surface.blit(label, label_rect)
+            self.rects.append(rect)
+            x += 140
+    def handle_click(self, pos):
+        for i, rect in enumerate(self.rects):
+            if rect.collidepoint(pos):
+                return self.options[i]
+        return None
+    def show_game_over(self, message):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        QtWidgets.QMessageBox.information(None, 'Game Over', message)
 
-            # if playing vs AI, undo the AI's last move too (if available)
-            if self.singleplayer and not self.gs.whiteToMove and self.undo_stack:
-                ai_move = self.undo_stack.pop()
-                self.gs.undoMove()
-                self.redo_stack.append(ai_move)
-
-            self.board_widget.valid_moves = self.gs.getValidMoves()
-            self.board_widget.selected_sq = None
-            self.board_widget.move_highlight.clear()
-            self.board_widget.update()
-            self.update_turn_message()
-
-    def redo_move(self):
-        if self.redo_stack:
-            move = self.redo_stack.pop()
-            self.gs.makeMove(move)
-            self.undo_stack.append(move)
-
-            # if singleplayer, redo AI's move too if available
-            if self.singleplayer and not self.gs.whiteToMove and self.redo_stack:
-                ai_move = self.redo_stack.pop()
-                self.gs.makeMove(ai_move)
-                self.undo_stack.append(ai_move)
-
-            self.board_widget.valid_moves = self.gs.getValidMoves()
-            self.board_widget.selected_sq = None
-            self.board_widget.move_highlight.clear()
-            self.board_widget.update()
-            self.update_turn_message()
-
-    # ---------- Restart ----------
-    def restart_game(self):
-        self.gs.__init__()
-        self.board_widget.selected_sq = None
-        self.board_widget.move_highlight.clear()
-        self.board_widget.valid_moves = self.gs.getValidMoves()
-        self.board_widget.update()
-        self.update_turn_message()
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.singleplayer = False
-        self.ai_level = None
-
-    # ---------- Singleplayer / Difficulty ----------
-        # ---------- Singleplayer Mode ----------
-    def enable_singleplayer(self):
-        self.singleplayer = True
-        self.show_alert("Single Player: Select AI Side")
-
-        sidebar = self.centralWidget().layout().itemAt(1).layout()
-
-        # Clear old difficulty buttons (if user presses again)
-        for i in reversed(range(sidebar.count())):
-            item = sidebar.itemAt(i)
-            w = item.widget()
-            if isinstance(w, QPushButton) and w.text() in ["AI = White", "AI = Black", "Easy", "Medium", "Hard", "Grandmaster"]:
-                sidebar.removeWidget(w)
-                w.deleteLater()
-
-        # Side selection
-        label = QLabel("AI plays as:")
-        label.setStyleSheet("color:white;")
-        sidebar.addWidget(label)
-
-        btn_white = QPushButton("AI = White")
-        btn_black = QPushButton("AI = Black")
-
-        for b in (btn_white, btn_black):
-            b.setStyleSheet("background-color:#555;color:white;border-radius:5px;padding:3px;")
-
-        btn_white.clicked.connect(lambda: self.set_ai_side("white"))
-        btn_black.clicked.connect(lambda: self.set_ai_side("black"))
-
-        sidebar.addWidget(btn_white)
-        sidebar.addWidget(btn_black)
-
-    def set_ai_side(self, side):
-        self.ai_plays_white = (side == "white")
-        self.show_alert(f"AI will play as {side.capitalize()}. Select difficulty now.")
-
-        sidebar = self.centralWidget().layout().itemAt(1).layout()
-
-        difficulties = ["Easy", "Medium", "Hard", "Grandmaster"]
-        for level in difficulties:
-            btn = QPushButton(level)
-            btn.setStyleSheet("background-color:#555;color:white;border-radius:5px;padding:3px;")
-            btn.clicked.connect(lambda checked, l=level: self.set_ai_difficulty(l))
-            sidebar.addWidget(btn)
-
-    def set_ai_difficulty(self, level):
-        self.ai_level = level
-        self.show_alert(f"Difficulty: {level}. Game starting...")
-
-        # Only restart after side + difficulty are set
-        self.restart_game()
-
-        # If AI plays white, make AI move immediately
-        if self.singleplayer and self.ai_plays_white:
-            QTimer.singleShot(500, self.ai_move)
-
-
-    def set_ai_difficulty(self, level):
-        self.ai_level = level
-        self.show_alert(f"AI Difficulty set to {level}")
-        # remove difficulty buttons after selection
-        if hasattr(self, 'difficulty_buttons'):
-            for btn in self.difficulty_buttons:
-                btn.setParent(None)
-            del self.difficulty_buttons
-
-    # ---------- AI ----------
-    def ai_move(self):
-        # debug: uncomment to see calls in console
-        # print("ai_move called; whiteToMove:", self.gs.whiteToMove, "ai_plays_white:", self.ai_plays_white)
-
-        moves = self.gs.getValidMoves()
-        if not moves:
+    def animate_move(self, move):
+        # Simple animation: slide piece from start to end
+        sr, sc = move.start
+        er, ec = move.end
+        img = self.images.get(f'{move.piece[1]}{move.piece[0]}')
+        if not img:
             return
+        frames = 10
+        for i in range(1, frames+1):
+            self.draw()
+            x = sc*100 + (ec-sc)*100*i//frames + 50
+            y = sr*100 + (er-sr)*100*i//frames + 50
+            rect = img.get_rect(center=(x, y))
+            self.screen.blit(img, rect)
+            pygame.display.flip()
+            pygame.time.delay(15)
 
-        # choose move by difficulty
-        if self.ai_level == 'Easy':
-            move = random.choice(moves)
-        elif self.ai_level == 'Medium':
-            move = self.minimax_move(depth=1)
-        elif self.ai_level == 'Hard':
-            move = self.minimax_move(depth=2)
-        elif self.ai_level == 'Grandmaster':
-            move = self.minimax_move(depth=3)
+    def show_settings(self):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+        dlg = SettingsDialog(settings=self.settings)
+        if dlg.exec_():
+            self.settings = dlg.get_settings()
+            if self.settings['fullscreen'] != self.fullscreen:
+                self.toggle_fullscreen()
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        if self.fullscreen:
+            self.screen = pygame.display.set_mode((800,800), pygame.FULLSCREEN)
         else:
-            move = random.choice(moves)
+            self.screen = pygame.display.set_mode((800,800), pygame.RESIZABLE)
 
-        # perform AI move and update UI
-        self.gs.makeMove(move)
-        self.undo_stack.append(move)
-        self.play_move_sound(capture=move.pieceCaptured != "--")
-        self.board_widget.valid_moves = self.gs.getValidMoves()
-        self.board_widget.update()
-        self.update_turn_message()
+class LandingScreen:
+    def __init__(self, surface):
+        self.surface = surface
+        self.font = pygame.font.SysFont('Arial', 48, bold=True)
+        self.button_font = pygame.font.SysFont('Arial', 32)
+        self.buttons = [
+            {'label': 'Single Player', 'rect': pygame.Rect(250, 250, 300, 60)},
+            {'label': 'Multiplayer', 'rect': pygame.Rect(250, 330, 300, 60)},
+            {'label': 'Settings', 'rect': pygame.Rect(250, 410, 300, 60)},
+            {'label': 'Color Options', 'rect': pygame.Rect(250, 490, 300, 60)},
+            {'label': 'Music', 'rect': pygame.Rect(250, 570, 300, 60)}
+        ]
+        self.selected = None
 
-    # ---------- Minimax ----------
-    def minimax_move(self, depth):
-        moves = self.gs.getValidMoves()
-        best_move = None
-        if self.gs.whiteToMove:
-            max_score = -float('inf')
-            for move in moves:
-                self.gs.makeMove(move)
-                score = self.minimax(depth-1, False)
-                self.gs.undoMove()
-                if score > max_score:
-                    max_score = score
-                    best_move = move
-        else:
-            min_score = float('inf')
-            for move in moves:
-                self.gs.makeMove(move)
-                score = self.minimax(depth-1, True)
-                self.gs.undoMove()
-                if score < min_score:
-                    min_score = score
-                    best_move = move
-        return best_move
+    def draw(self):
+        self.surface.fill((34, 40, 49))
+        title = self.font.render('Python Chess', True, (255, 211, 105))
+        self.surface.blit(title, (200, 120))
+        for btn in self.buttons:
+            pygame.draw.rect(self.surface, (57, 62, 70), btn['rect'], border_radius=18)
+            pygame.draw.rect(self.surface, (255, 211, 105), btn['rect'], 3, border_radius=18)
+            label = self.button_font.render(btn['label'], True, (255,255,255))
+            label_rect = label.get_rect(center=btn['rect'].center)
+            self.surface.blit(label, label_rect)
+        pygame.display.flip()
 
-    def minimax(self, depth, is_maximizing):
-        if depth == 0:
-            return self.evaluate_board()
-        moves = self.gs.getValidMoves()
-        if is_maximizing:
-            max_score = -float('inf')
-            for move in moves:
-                self.gs.makeMove(move)
-                score = self.minimax(depth-1, False)
-                self.gs.undoMove()
-                max_score = max(max_score, score)
-            return max_score
-        else:
-            min_score = float('inf')
-            for move in moves:
-                self.gs.makeMove(move)
-                score = self.minimax(depth-1, True)
-                self.gs.undoMove()
-                min_score = min(min_score, score)
-            return min_score
+    def get_clicked(self, pos):
+        for i, btn in enumerate(self.buttons):
+            if btn['rect'].collidepoint(pos):
+                return btn['label']
+        return None
 
-    def evaluate_board(self):
-        piece_values = {'P':1, 'N':3, 'B':3, 'R':5, 'Q':9, 'K':0}
-        score = 0
-        for row in self.gs.board:
-            for piece in row:
-                if piece != "--":
-                    value = piece_values[piece[1]]
-                    if piece[0] == 'w':
-                        score += value
-                    else:
-                        score -= value
-        return score
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((800, 800), pygame.RESIZABLE)
+    pygame.display.set_caption('Python Chess')
+    landing = LandingScreen(screen)
+    running = True
+    mode = None
+    while running and not mode:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                clicked = landing.get_clicked(event.pos)
+                if clicked == 'Single Player':
+                    mode = 'single'
+                elif clicked == 'Multiplayer':
+                    mode = 'multi'
+                elif clicked == 'Settings':
+                    # Placeholder: settings dialog
+                    pass
+                elif clicked == 'Color Options':
+                    # Placeholder: color options
+                    pass
+                elif clicked == 'Music':
+                    # Placeholder: music toggle
+                    pass
+        landing.draw()
+    if mode == 'single':
+        game = ChessGame()
+        game.ai_enabled = True
+        game.run()
+    elif mode == 'multi':
+        game = ChessGame()
+        game.ai_enabled = False
+        game.run()
 
-# ---------------- Main ----------------
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = ChessUI()
-    sys.exit(app.exec())
+if __name__ == '__main__':
+    main()
