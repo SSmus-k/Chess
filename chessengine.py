@@ -20,6 +20,11 @@ class Move:
 class ChessEngine:
     def __init__(self):
         self.board = self._create_start_board()
+        self.white_to_move = True
+        self.move_history = []
+        self.state_stack = []
+        self.castling_rights = {'wK': True, 'wQ': True, 'bK': True, 'bQ': True}
+        self.en_passant_target = None
         self.score = {'w': 0, 'b': 0}
 
     def capture_piece(self, piece):
@@ -52,11 +57,23 @@ class ChessEngine:
     # ---------------- MOVE HANDLING ----------------
 
     def make_move(self, move):
+        if move is None: return
         self._push_state()
+        
+        # Check for capture for sound/scoring
+        if move.captured:
+            self.capture_piece(move.captured)
+            
         self._apply_move(move)
         self.move_history.append(move)
         self.white_to_move = not self.white_to_move
-
+    def get_move(self, start_sq, end_sq):
+        """Finds the Move object in valid_moves matching these coordinates."""
+        valid_moves = self.get_valid_moves()
+        for move in valid_moves:
+            if move.start == start_sq and move.end == end_sq:
+                return move
+        return None
     def undo_move(self):
         if self.state_stack:
             self.board, self.castling_rights, self.en_passant_target, self.white_to_move = self.state_stack.pop()
