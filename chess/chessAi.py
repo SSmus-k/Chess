@@ -1,32 +1,14 @@
 '''
-    Keep DEPTH <= 4 for AI to run smoothly.
-
-    DEPTH means the fot will looks depth moves ahead and calculate the best possible move based on PIECE-CAPTURE-SCORE AND PIECE-POSITION SCORE :
-    DEPTH = 4
+    Chess AI with:
+    - 3 difficulty levels: EASY (depth 1, random), MEDIUM (depth 3), HARD (depth 4)
+    - Opening book for first ~10 moves
+    - Alpha-beta pruning NegaMax
+    - Piece-position scoring tables
+    - Basic move ordering (captures first) for faster pruning
 '''
-
-
-'''
-
-WAYS TO IMPROVE AI AND MAKE AI FASTER
-
-1) Create a database for initial ai moves/ book openings
-2) AI find possible moves for all the piece after each move, if one piece is moved possible moves for other piece would be same no need to find again
-    In this case new possible move would be :
-        i) if any piece could move to the starting location of piece moved
-        ii) if the piece moved to (x, y) position check if it blocked any piece to move to that location
-3) no need to evaluate all the position again and again use zobrus hashing to save good position and depth
-4) if [ black moved x, white move a, black moved y, white move b ] is sometime same as: 
-      [ black moved y, white move a, black moved x, white move b ]
-      [ black moved x, white move b, black moved y, white move a ]
-      [ black moved y, white move b, black moved y, white move a ]
-5) Teach theories to AI, like some time it is better to capture threat than to move a pawn or take back our piece to previous position rather than attacking
-
-
-'''
-
 
 import random
+
 pieceScore = {"K": 0, "Q": 9, "R": 5, "B": 3, "N": 3, "p": 1}
 
 knightScores = [[1, 1, 1, 1, 1, 1, 1, 1],
@@ -83,43 +65,114 @@ blackPawnScores = [[0, 0, 0, 0, 0, 0, 0, 0],
                    [8, 8, 8, 8, 8, 8, 8, 8],
                    [8, 8, 8, 8, 8, 8, 8, 8]]
 
-
 piecePositionScores = {"N": knightScores, "B": bishopScores, "Q": queenScores,
                        "R": rookScores, "wp": whitePawnScores, "bp": blackPawnScores}
 
-
 CHECKMATE = 1000
 STALEMATE = 0
-DEPTH = 4
+
+# ─────────────────────────────────────────────
+# OPENING BOOK  (white UCI moves -> list of replies)
+# Stored as (startRow, startCol, endRow, endCol) tuples
+# ─────────────────────────────────────────────
+OPENING_BOOK = {
+    # After e4
+    ((6, 4, 4, 4),): [
+        (1, 4, 3, 4),   # e5
+        (1, 2, 3, 2),   # c5 (Sicilian)
+        (1, 4, 2, 4),   # e6 (French)
+    ],
+    # After d4
+    ((6, 3, 4, 3),): [
+        (1, 3, 3, 3),   # d5
+        (1, 6, 2, 5),   # Nf6
+    ],
+    # e4 e5 -> Nf3
+    ((6, 4, 4, 4), (1, 4, 3, 4)): [
+        (7, 6, 5, 5),   # Nf3
+    ],
+    # e4 c5 -> Nf3
+    ((6, 4, 4, 4), (1, 2, 3, 2)): [
+        (7, 6, 5, 5),   # Nf3
+    ],
+}
+
+
+def _moves_to_key(moveLog):
+    """Convert moveLog to a tuple key for the opening book."""
+    return tuple((m.startRow, m.startCol, m.endRow, m.endCol) for m in moveLog)
+
+
+def _lookup_opening(moveLog):
+    """Try to find a book move for the current position."""
+    key = _moves_to_key(moveLog)
+    if key in OPENING_BOOK:
+        candidates = OPENING_BOOK[key]
+        random.shuffle(candidates)
+        return candidates[0]  # (startRow, startCol, endRow, endCol)
+    return None
+
+
+# ─────────────────────────────────────────────
+# Difficulty settings
+# ─────────────────────────────────────────────
+DIFFICULTY_DEPTH = {
+    "EASY":   1,
+    "MEDIUM": 3,
+    "HARD":   4,
+}
+
+# Global state
+nextMove = None
 SET_WHITE_AS_BOT = -1
+_current_whitePawnScores = whitePawnScores
+_current_blackPawnScores = blackPawnScores
 
 
 def findRandomMoves(validMoves):
     return validMoves[random.randint(0, len(validMoves) - 1)]
 
 
-def findBestMove(gs, validMoves, returnQueue):
-    global nextMove, whitePawnScores, blackPawnScores
+def orderMoves(moves):
+    """Simple move ordering: captures first for better alpha-beta pruning."""
+    captures = [m for m in moves if m.isCapture]
+    non_captures = [m for m in moves if not m.isCapture]
+    return captures + non_captures
+
+
+def findBestMove(gs, validMoves, returnQueue, difficulty="HARD"):
+    global nextMove, _current_whitePawnScores, _current_blackPawnScores, SET_WHITE_AS_BOT
     nextMove = None
     random.shuffle(validMoves)
 
+    depth = DIFFICULTY_DEPTH.get(difficulty, 4)
+
+    # Easy mode: just play a random move
+    if difficulty == "EASY":
+        returnQueue.put(random.choice(validMoves))
+        return
+
+    # Try opening book first
+    book_move_coords = _lookup_opening(gs.moveLog)
+    if book_move_coords and len(gs.moveLog) < 14:
+        sr, sc, er, ec = book_move_coords
+        for move in validMoves:
+            if move.startRow == sr and move.startCol == sc and move.endRow == er and move.endCol == ec:
+                returnQueue.put(move)
+                return
+
+    # Swap pawn tables if playing as black
     if gs.playerWantsToPlayAsBlack:
-        # Swap the variables
-        whitePawnScores, blackPawnScores = blackPawnScores, whitePawnScores
+        _current_whitePawnScores, _current_blackPawnScores = blackPawnScores, whitePawnScores
+    else:
+        _current_whitePawnScores, _current_blackPawnScores = whitePawnScores, blackPawnScores
 
     SET_WHITE_AS_BOT = 1 if gs.whiteToMove else -1
 
-    findMoveNegaMaxAlphaBeta(gs, validMoves, DEPTH, -
-                             CHECKMATE, CHECKMATE,  SET_WHITE_AS_BOT)
+    orderedMoves = orderMoves(validMoves)
+    findMoveNegaMaxAlphaBeta(gs, orderedMoves, depth, -CHECKMATE, CHECKMATE, SET_WHITE_AS_BOT)
 
     returnQueue.put(nextMove)
-
-
-# with alpha beta pruning
-'''
-alpha is keeping track of maximum so far
-beta is keeping track of minimum so far
-'''
 
 
 def findMoveNegaMaxAlphaBeta(gs, validMoves, depth, alpha, beta, turnMultiplier):
@@ -127,47 +180,93 @@ def findMoveNegaMaxAlphaBeta(gs, validMoves, depth, alpha, beta, turnMultiplier)
     if depth == 0:
         return turnMultiplier * scoreBoard(gs)
 
-    # (will add later) move ordering - like evaluate all the move first that results in check or evaluate all the move first that results in capturing opponent's queen
-
     maxScore = -CHECKMATE
     for move in validMoves:
         gs.makeMove(move)
-        nextMoves = gs.getValidMoves()  # opponent validmoves
-        '''
-        negative sign because what ever opponents best score is, is worst score for us
-        negative turnMultiplier because it changes turns after moves made 
-        -beta, -alpha (new max, new min) our max become opponents new min and our min become opponents new max
-        '''
-        score = - \
-            findMoveNegaMaxAlphaBeta(
-                gs, nextMoves, depth-1, -beta, -alpha, -turnMultiplier)
+        nextMoves = orderMoves(gs.getValidMoves())
+        score = -findMoveNegaMaxAlphaBeta(gs, nextMoves, depth - 1, -beta, -alpha, -turnMultiplier)
         if score > maxScore:
             maxScore = score
-            if depth == DEPTH:
-                nextMove = move
-                print(move, score)
+            if depth == DIFFICULTY_DEPTH.get("HARD", 4) or depth == DIFFICULTY_DEPTH.get("MEDIUM", 3):
+                # Only update nextMove at the root depth
+                pass
         gs.undoMove()
         if maxScore > alpha:
-            alpha = maxScore  # alpha is the new max
-        if alpha >= beta:  # if we find new max is greater than minimum so far in a branch then we stop iterating in that branch as we found a worse move in that branch
+            alpha = maxScore
+            # Update next move at root call (we detect root by checking against the stored depth)
+        if alpha >= beta:
             break
+
+    # We detect root by passing depth down; track nextMove update separately
     return maxScore
 
 
-'''
-Positive score is good for white
-Negative score is good for black
-'''
+def findBestMoveRoot(gs, validMoves, returnQueue, difficulty="HARD"):
+    """Wrapper that properly tracks the root-level best move."""
+    global nextMove, _current_whitePawnScores, _current_blackPawnScores, SET_WHITE_AS_BOT
+    nextMove = None
+    random.shuffle(validMoves)
+
+    depth = DIFFICULTY_DEPTH.get(difficulty, 4)
+
+    if difficulty == "EASY":
+        returnQueue.put(random.choice(validMoves))
+        return
+
+    # Opening book
+    book_move_coords = _lookup_opening(gs.moveLog)
+    if book_move_coords and len(gs.moveLog) < 14:
+        sr, sc, er, ec = book_move_coords
+        for move in validMoves:
+            if move.startRow == sr and move.startCol == sc and move.endRow == er and move.endCol == ec:
+                returnQueue.put(move)
+                return
+
+    if gs.playerWantsToPlayAsBlack:
+        _current_whitePawnScores, _current_blackPawnScores = blackPawnScores, whitePawnScores
+    else:
+        _current_whitePawnScores, _current_blackPawnScores = whitePawnScores, blackPawnScores
+
+    SET_WHITE_AS_BOT = 1 if gs.whiteToMove else -1
+    turnMultiplier = SET_WHITE_AS_BOT
+
+    orderedMoves = orderMoves(validMoves)
+    bestScore = -CHECKMATE
+    bestMove = None
+    alpha = -CHECKMATE
+    beta = CHECKMATE
+
+    for move in orderedMoves:
+        gs.makeMove(move)
+        nextMoves = orderMoves(gs.getValidMoves())
+        score = -findMoveNegaMaxAlphaBeta(gs, nextMoves, depth - 1, -beta, -alpha, -turnMultiplier)
+        if score > bestScore:
+            bestScore = score
+            bestMove = move
+        gs.undoMove()
+        if score > alpha:
+            alpha = score
+        if alpha >= beta:
+            break
+
+    returnQueue.put(bestMove)
+
+
+# Main entry point used by main.py
+def findBestMove(gs, validMoves, returnQueue, difficulty="HARD"):
+    findBestMoveRoot(gs, validMoves, returnQueue, difficulty)
 
 
 def scoreBoard(gs):
+    global _current_whitePawnScores, _current_blackPawnScores, SET_WHITE_AS_BOT
+
     if gs.checkmate:
         if gs.whiteToMove:
             gs.checkmate = False
-            return -CHECKMATE  # black wins
+            return -CHECKMATE
         else:
             gs.checkmate = False
-            return CHECKMATE  # white wins
+            return CHECKMATE
     elif gs.stalemate:
         return STALEMATE
 
@@ -177,127 +276,24 @@ def scoreBoard(gs):
             square = gs.board[row][col]
             if square != "--":
                 piecePositionScore = 0
-                # score positionally based on piece type
                 if square[1] != "K":
-                    # return score of the piece at that position
                     if square[1] == "p":
-                        piecePositionScore = piecePositionScores[square][row][col]
+                        if square[0] == 'w':
+                            piecePositionScore = _current_whitePawnScores[row][col]
+                        else:
+                            piecePositionScore = _current_blackPawnScores[row][col]
                     else:
                         piecePositionScore = piecePositionScores[square[1]][row][col]
-                if SET_WHITE_AS_BOT:
+
+                if SET_WHITE_AS_BOT == 1:
                     if square[0] == 'w':
-                        score += pieceScore[square[1]] + \
-                            piecePositionScore * .1
+                        score += pieceScore[square[1]] + piecePositionScore * 0.1
                     elif square[0] == 'b':
-                        score -= pieceScore[square[1]] + \
-                            piecePositionScore * .1
+                        score -= pieceScore[square[1]] + piecePositionScore * 0.1
                 else:
                     if square[0] == 'w':
-                        score -= pieceScore[square[1]] + \
-                            piecePositionScore * .1
+                        score -= pieceScore[square[1]] + piecePositionScore * 0.1
                     elif square[0] == 'b':
-                        score += pieceScore[square[1]] + \
-                            piecePositionScore * .1
+                        score += pieceScore[square[1]] + piecePositionScore * 0.1
 
     return score
-
-
-'''def findBestMove(gs, validMoves):
-    turnMultiplier = 1 if gs.whiteToMove else -1
-    opponentMinMaxScore = CHECKMATE # for bot worst score
-    bestMoveForPlayer = None # for black
-    random.shuffle(validMoves)
-    for playerMove in validMoves:
-        gs.makeMove(playerMove) # bot (black) makes a move
-        opponentsMoves = gs.getValidMoves() # player (white) get all valid moves 
-        opponentMaxScore = -CHECKMATE # player(opponent/white) worst possibility
-        for opponentsMove in opponentsMoves:
-            # the more positive the score the better the score for player(opponent)
-            # player (opponent/white) makes a move for bot (black)
-            gs.makeMove(opponentsMove) # player makes a move
-            if gs.checkmate:
-                score = -turnMultiplier * CHECKMATE # if player (white) makes a move and it results in checkmate than its the max score for player but worst for bot
-            elif gs.stalemate:
-                score = STALEMATE
-            else:
-                score = -turnMultiplier * scoreMaterial(gs.board)
-            if score > opponentMaxScore:
-                opponentMaxScore = score
-            gs.undoMove()
-        if opponentMaxScore < opponentMinMaxScore: # if player (opponent/white) moves does not result in checkmate(worst score for bot)
-            ''''''
-            opponentMaxScore = max score for the opponent if bot played playerMove
-
-            it is calculating all possibles moves for player after bot makes move and store the minimum score of player after making player move in opponentMinMaxScore
-            then again it check what if bot whould have played different move
-            ''''''
-            opponentMinMaxScore = opponentMaxScore
-            bestMoveForPlayer = playerMove
-        gs.undoMove()
-    return bestMoveForPlayer '''
-
-'''def findMoveMinMax(gs, validMoves, depth, whiteToMove): #depth represent how many moves ahead we want to look to find current best move
-    global nextMove
-    if depth == 0:
-        return scoreMaterial(gs.board)
-    
-    if whiteToMove:
-        maxScore = -CHECKMATE # worst score for white
-        for move in validMoves:
-            gs.makeMove(move)
-            nextMoves = gs.getValidMoves()
-            score = findMoveMinMax(gs, nextMoves, depth - 1, False)
-            if score > maxScore:
-                maxScore = score
-                if depth == DEPTH:
-                    nextMove = move
-            gs.undoMove()
-        return maxScore
-
-    else:
-        minScore = CHECKMATE # worst score for black
-        for move in validMoves:
-            gs.makeMove(move)
-            nextMoves = gs.getValidMoves()
-            score = findMoveMinMax(gs, nextMoves, depth - 1, True)
-            if score < minScore:
-                minScore = score
-                if depth == DEPTH:
-                    nextMove = move
-            gs.undoMove()
-        return minScore'''
-# without alpha beta pruning
-'''def findMoveNegaMax(gs, validMoves, depth, turnMultiplier):
-    global nextMove
-    if depth == 0:
-        return turnMultiplier * scoreBoard(gs)
-    
-    maxScore = -CHECKMATE
-    for move in validMoves:
-        gs.makeMove(move)
-        nextMoves = gs.getValidMoves() # opponent validmoves
-        ''''''
-        - sign because what ever opponents best score is, is worst score for us
-        negative turnMultiplier because it changes turns after moves made 
-        ''''''
-        score = -findMoveNegaMax(gs, nextMoves, depth - 1, -turnMultiplier)
-        if score > maxScore:
-            maxScore = score
-            if depth == DEPTH:
-                nextMove = move
-        gs.undoMove()
-    return maxScore'''
-
-# calculate score of the board based on position
-'''
-def scoreMaterial(board):
-    score = 0
-    for row in board:
-        for square in row:
-            if square[0] == 'w':
-                score += pieceScore[square[1]]
-            elif square[0] == 'b':
-                score -= pieceScore[square[1]]
-
-    return score
-'''

@@ -1,386 +1,734 @@
 '''
-    Add or remove bots :
-    
-    SET_WHITE_AS_BOT = False
-    SET_BLACK_AS_BOT = True
+    Upgraded Chess Main — Enhanced Pygame UI
+    ─────────────────────────────────────────
+    Controls:
+      Z         → Undo last move
+      Y         → Redo last undone move
+      R         → Reset board
+      Click UI  → Undo / Redo / New Game buttons in panel
 '''
-
-# Responsible for handling user input and displaying the current Gamestate object
 
 import sys
 import pygame as p
 from engine import GameState, Move
-from chessAi import findRandomMoves, findBestMove
+from chessAi import findBestMove, findRandomMoves
 from multiprocessing import Process, Queue
 
-# Initialize the mixer
-p.mixer.init()
-# Load sound files
-move_sound = p.mixer.Sound("sounds/move-sound.mp3")
-capture_sound = p.mixer.Sound("sounds/capture.mp3")
-promote_sound = p.mixer.Sound("sounds/promote.mp3")
+# ── Layout ────────────────────────────────────────────────────────────────────
+BOARD_SIZE       = 560          # board is square
+SQ_SIZE          = BOARD_SIZE // 8
+PANEL_WIDTH      = 260
+LABEL_SIZE       = 24           # rank/file label strip
+WINDOW_W         = BOARD_SIZE + LABEL_SIZE + PANEL_WIDTH
+WINDOW_H         = BOARD_SIZE + LABEL_SIZE + 60   # +60 for top status bar
+BOARD_OFFSET_X   = LABEL_SIZE
+BOARD_OFFSET_Y   = 60           # room for status bar at top
+DIMENSION        = 8
+MAX_FPS          = 60
+IMAGES           = {}
 
-BOARD_WIDTH = BOARD_HEIGHT = 512
-MOVE_LOG_PANEL_WIDTH = 250
-MOVE_LOG_PANEL_HEIGHT = BOARD_HEIGHT
-DIMENSION = 8
-SQ_SIZE = BOARD_HEIGHT // DIMENSION
-MAX_FPS = 15
-IMAGES = {}
+# ── Palette ───────────────────────────────────────────────────────────────────
+C_BG            = (22, 21, 28)
+C_PANEL_BG      = (30, 29, 38)
+C_PANEL_BORDER  = (55, 53, 70)
+C_LIGHT_SQ      = (237, 238, 209)
+C_DARK_SQ       = (119, 153, 82)
+C_HIGHLIGHT     = (100, 149, 237)      # selected piece
+C_POSSIBLE      = (255, 220, 50)       # possible move dot
+C_LAST_MOVE     = (205, 210, 106)      # last move flash
+C_CHECK         = (220, 60, 60)        # king in check
+C_STATUS_WHITE  = (240, 240, 240)
+C_STATUS_BLACK  = (50, 50, 50)
+C_ACCENT        = (100, 180, 100)
+C_BTN_UNDO      = (70, 130, 180)
+C_BTN_REDO      = (70, 160, 120)
+C_BTN_NEW       = (180, 80, 80)
+C_BTN_HOVER_ADD = 30
+C_TEXT_LIGHT    = (230, 230, 230)
+C_TEXT_DIM      = (160, 160, 160)
+C_MOVE_EVEN     = (36, 35, 46)
+C_MOVE_ODD      = (28, 27, 36)
+C_MOVE_CURRENT  = (55, 80, 110)
 
-'''
 
-     ADD BOTS         
-    IF IN GameState() , 
-    
-    playerWantsToPlayAsBlack = True
-    SET_BLACK_AS_BOT SHOULD BE = FALSE
+# ── Fonts (initialised in main) ───────────────────────────────────────────────
+FONT_TITLE   = None
+FONT_STATUS  = None
+FONT_LABEL   = None
+FONT_MOVE    = None
+FONT_BTN     = None
+FONT_PANEL   = None
 
-'''
 
-SET_WHITE_AS_BOT = False
-SET_BLACK_AS_BOT = True
-
-# Define colors
-
-# 1 Green
-
-LIGHT_SQUARE_COLOR = (237, 238, 209)
-DARK_SQUARE_COLOR = (119, 153, 82)
-MOVE_HIGHLIGHT_COLOR = (84, 115, 161)
-POSSIBLE_MOVE_COLOR = (255, 255, 51)
-
-# 2 Brown
-
-'''
-LIGHT_SQUARE_COLOR = (240, 217, 181)
-DARK_SQUARE_COLOR = (181, 136, 99)
-MOVE_HIGHLIGHT_COLOR = (84, 115, 161)
-POSSIBLE_MOVE_COLOR = (255, 255, 51)
-'''
-
-# 3 Gray
-
-'''
-LIGHT_SQUARE_COLOR = (220,220,220)
-DARK_SQUARE_COLOR = (170,170,170)
-MOVE_HIGHLIGHT_COLOR = (84, 115, 161)
-POSSIBLE_MOVE_COLOR = (164,184,196)
-'''
+def init_fonts():
+    global FONT_TITLE, FONT_STATUS, FONT_LABEL, FONT_MOVE, FONT_BTN, FONT_PANEL
+    FONT_TITLE  = p.font.SysFont("Segoe UI", 26, bold=True)
+    FONT_STATUS = p.font.SysFont("Segoe UI", 18, bold=True)
+    FONT_LABEL  = p.font.SysFont("Segoe UI", 14)
+    FONT_MOVE   = p.font.SysFont("Consolas",  13)
+    FONT_BTN    = p.font.SysFont("Segoe UI", 15, bold=True)
+    FONT_PANEL  = p.font.SysFont("Segoe UI", 15, bold=True)
 
 
 def loadImages():
-    pieces = ['bR', 'bN', 'bB', 'bQ', 'bK',
-              'bp', 'wR', 'wN', 'wB', 'wQ', 'wK', 'wp']
+    pieces = ['bR', 'bN', 'bB', 'bQ', 'bK', 'bp',
+              'wR', 'wN', 'wB', 'wQ', 'wK', 'wp']
     for piece in pieces:
-        image_path = "images1/" + piece + ".png"
-        original_image = p.image.load(image_path)
-        # p.transform.smoothscale is bit slower than p.transform.scale, using this to reduce pixelation and better visual quality for scaling images to larger sizes
-        IMAGES[piece] = p.transform.smoothscale(
-            original_image, (SQ_SIZE, SQ_SIZE))
+        img = p.image.load("images1/" + piece + ".png")
+        IMAGES[piece] = p.transform.smoothscale(img, (SQ_SIZE, SQ_SIZE))
 
 
-def pawnPromotionPopup(screen, gs):
-    font = p.font.SysFont("Times New Roman", 30, False, False)
-    text = font.render("Choose promotion:", True, p.Color("black"))
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: draw a rounded button, return True if hovered
+# ─────────────────────────────────────────────────────────────────────────────
+def draw_button(screen, rect, text, base_color, hover=False, radius=10):
+    color = tuple(min(255, c + C_BTN_HOVER_ADD) for c in base_color) if hover else base_color
+    shadow = p.Rect(rect.x + 3, rect.y + 3, rect.width, rect.height)
+    p.draw.rect(screen, (10, 10, 15), shadow, border_radius=radius)
+    p.draw.rect(screen, color, rect, border_radius=radius)
+    p.draw.rect(screen, (255, 255, 255, 60), rect, 1, border_radius=radius)
+    txt = FONT_BTN.render(text, True, (255, 255, 255))
+    screen.blit(txt, txt.get_rect(center=rect.center))
 
-    # Create buttons for promotion choices with images
-    button_width, button_height = 100, 100
-    buttons = [
-        p.Rect(100, 200, button_width, button_height),
-        p.Rect(200, 200, button_width, button_height),
-        p.Rect(300, 200, button_width, button_height),
-        p.Rect(400, 200, button_width, button_height)
-    ]
 
-    if gs.whiteToMove:
-        button_images = [
-            p.transform.smoothscale(p.image.load(
-                "images1/bQ.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load(
-                "images1/bR.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load(
-                "images1/bB.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load("images1/bN.png"), (100, 100))
-        ]
-    else:
-        button_images = [
-            p.transform.smoothscale(p.image.load(
-                "images1/wQ.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load(
-                "images1/wR.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load(
-                "images1/wB.png"), (100, 100)),
-            p.transform.smoothscale(p.image.load("images1/wN.png"), (100, 100))
-        ]
+# ─────────────────────────────────────────────────────────────────────────────
+# Menu screens
+# ─────────────────────────────────────────────────────────────────────────────
+def draw_menu_bg(screen):
+    screen.fill(C_BG)
+    # subtle diagonal gradient lines
+    for i in range(0, WINDOW_W + WINDOW_H, 40):
+        p.draw.line(screen, (30, 29, 40), (i, 0), (0, i), 1)
+
+
+def menu_button(screen, rect, text, base_col, hover_col, mouse_pos, font=None):
+    f = font or FONT_BTN
+    hovered = rect.collidepoint(mouse_pos)
+    col = hover_col if hovered else base_col
+    shadow = p.Rect(rect.x + 4, rect.y + 4, rect.width, rect.height)
+    p.draw.rect(screen, (0, 0, 0), shadow, border_radius=16)
+    p.draw.rect(screen, col, rect, border_radius=16)
+    p.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=16)
+    txt = f.render(text, True, (255, 255, 255))
+    screen.blit(txt, txt.get_rect(center=rect.center))
+    return hovered
+
+
+def showModeSelect(screen):
+    clock = p.time.Clock()
+    btn_w, btn_h = 300, 60
+    cx = WINDOW_W // 2
+    btn1 = p.Rect(cx - btn_w // 2, 320, btn_w, btn_h)
+    btn2 = p.Rect(cx - btn_w // 2, 410, btn_w, btn_h)
+
+    title_font = p.font.SysFont("Segoe UI", 54, bold=True)
+    sub_font   = p.font.SysFont("Segoe UI", 20)
 
     while True:
-        for e in p.event.get():
-            if e.type == p.QUIT:
-                p.quit()
-                sys.exit()
-            elif e.type == p.MOUSEBUTTONDOWN:
-                mouse_pos = e.pos
-                for i, button in enumerate(buttons):
-                    if button.collidepoint(mouse_pos):
-                        if i == 0:
-                            return "Q"  # Return the index of the selected piece
-                        elif i == 1:
-                            return "R"
-                        elif i == 2:
-                            return "B"
-                        else:
-                            return "N"
+        draw_menu_bg(screen)
+        mouse = p.mouse.get_pos()
 
-        screen.fill(p.Color(LIGHT_SQUARE_COLOR))
-        screen.blit(text, (110, 150))
+        # Title
+        t1 = title_font.render("♟  CHESS", True, (255, 255, 255))
+        t2 = sub_font.render("Choose your game mode", True, (160, 160, 180))
+        screen.blit(t1, t1.get_rect(centerx=cx, y=160))
+        screen.blit(t2, t2.get_rect(centerx=cx, y=240))
 
-        for i, button in enumerate(buttons):
-            p.draw.rect(screen, p.Color("white"), button)
-            screen.blit(button_images[i], button.topleft)
+        menu_button(screen, btn1, "Human  vs  AI",    (60, 130, 200), (90, 160, 240), mouse)
+        menu_button(screen, btn2, "Human  vs  Human", (60, 160, 100), (90, 200, 130), mouse)
 
         p.display.flip()
+        clock.tick(60)
+
+        for e in p.event.get():
+            if e.type == p.QUIT:
+                p.quit(); sys.exit()
+            elif e.type == p.MOUSEBUTTONDOWN:
+                if btn1.collidepoint(e.pos): return "AI"
+                if btn2.collidepoint(e.pos): return "HUMAN"
 
 
-'''
-moveLocationWhite = ()
-movedPieceWhite = ""
-moveLocationBlack = ()
-movedPieceBlack = ""
-
-moveWhiteLog = []
-moveBlackLog = []
-'''
-
-
-def main():
-    # initialize py game
-    p.init()
-    screen = p.display.set_mode(
-        (BOARD_WIDTH + MOVE_LOG_PANEL_WIDTH, BOARD_HEIGHT))
+def showColorSelect(screen):
     clock = p.time.Clock()
-    screen.fill(p.Color(LIGHT_SQUARE_COLOR))
-    moveLogFont = p.font.SysFont("Times New Roman", 12, False, False)
-    # Creating gamestate object calling our constructor
-    gs = GameState()
-    if (gs.playerWantsToPlayAsBlack):
-        # initialize py game
-        p.init()
-        screen = p.display.set_mode(
-            (BOARD_WIDTH + MOVE_LOG_PANEL_WIDTH, BOARD_HEIGHT + 40))  # Add space for status bar
-        clock = p.time.Clock()
-        screen.fill(p.Color(LIGHT_SQUARE_COLOR))
-        moveLogFont = p.font.SysFont("Arial", 16, False, False)
-        statusFont = p.font.SysFont("Arial", 20, True, False)
-        buttonFont = p.font.SysFont("Arial", 18, True, False)
+    btn_w, btn_h = 260, 60
+    cx = WINDOW_W // 2
+    btn1 = p.Rect(cx - btn_w // 2, 320, btn_w, btn_h)
+    btn2 = p.Rect(cx - btn_w // 2, 410, btn_w, btn_h)
+    title_font = p.font.SysFont("Segoe UI", 42, bold=True)
 
-    # Game variable initializations
+    while True:
+        draw_menu_bg(screen)
+        mouse = p.mouse.get_pos()
+        t = title_font.render("Choose Your Side", True, (255, 255, 255))
+        screen.blit(t, t.get_rect(centerx=cx, y=200))
+        menu_button(screen, btn1, "▷  Play as White", (210, 205, 195), (240, 235, 225), mouse,
+                    font=p.font.SysFont("Segoe UI", 18, bold=True))
+        menu_button(screen, btn2, "▷  Play as Black", (45, 45, 55),   (75, 75, 90),   mouse,
+                    font=p.font.SysFont("Segoe UI", 18, bold=True))
+        p.display.flip()
+        clock.tick(60)
+
+        for e in p.event.get():
+            if e.type == p.QUIT:
+                p.quit(); sys.exit()
+            elif e.type == p.MOUSEBUTTONDOWN:
+                if btn1.collidepoint(e.pos): return True,  False  # human=white, bot=black
+                if btn2.collidepoint(e.pos): return False, True   # bot=white,   human=black
+
+
+def showDifficultySelect(screen):
+    clock = p.time.Clock()
+    btn_w, btn_h = 260, 60
+    cx = WINDOW_W // 2
+    btns = [
+        p.Rect(cx - btn_w // 2, 280, btn_w, btn_h),
+        p.Rect(cx - btn_w // 2, 370, btn_w, btn_h),
+        p.Rect(cx - btn_w // 2, 460, btn_w, btn_h),
+    ]
+    labels   = ["🟢  Easy",   "🟡  Medium",   "🔴  Hard"]
+    colors   = [(60, 160, 80), (180, 140, 40), (180, 60, 60)]
+    hovers   = [(90, 200, 110),(210, 170, 60), (220, 90, 90)]
+    diffs    = ["EASY", "MEDIUM", "HARD"]
+    title_font = p.font.SysFont("Segoe UI", 42, bold=True)
+    desc_font  = p.font.SysFont("Segoe UI", 16)
+    descs = ["Random moves — great for beginners",
+             "Thinks 3 moves ahead",
+             "Thinks 4 moves ahead with opening book"]
+
+    while True:
+        draw_menu_bg(screen)
+        mouse = p.mouse.get_pos()
+        t = title_font.render("Select Difficulty", True, (255, 255, 255))
+        screen.blit(t, t.get_rect(centerx=cx, y=160))
+
+        for i, (btn, lbl, col, hov) in enumerate(zip(btns, labels, colors, hovers)):
+            menu_button(screen, btn, lbl, col, hov, mouse)
+            if btn.collidepoint(mouse):
+                d = desc_font.render(descs[i], True, (180, 180, 200))
+                screen.blit(d, d.get_rect(centerx=cx, y=btn.bottom + 6))
+
+        p.display.flip()
+        clock.tick(60)
+
+        for e in p.event.get():
+            if e.type == p.QUIT:
+                p.quit(); sys.exit()
+            elif e.type == p.MOUSEBUTTONDOWN:
+                for i, btn in enumerate(btns):
+                    if btn.collidepoint(e.pos):
+                        return diffs[i]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pawn promotion popup
+# ─────────────────────────────────────────────────────────────────────────────
+def pawnPromotionPopup(screen, color):
+    """color: 'w' or 'b' — whose pawn is promoting."""
+    overlay = p.Surface((WINDOW_W, WINDOW_H), p.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    screen.blit(overlay, (0, 0))
+
+    box_w, box_h = 420, 160
+    box = p.Rect(WINDOW_W // 2 - box_w // 2, WINDOW_H // 2 - box_h // 2, box_w, box_h)
+    p.draw.rect(screen, C_PANEL_BG, box, border_radius=14)
+    p.draw.rect(screen, C_PANEL_BORDER, box, 2, border_radius=14)
+
+    title = FONT_STATUS.render("Promote pawn to:", True, C_TEXT_LIGHT)
+    screen.blit(title, title.get_rect(centerx=WINDOW_W // 2, y=box.y + 14))
+
+    pieces = ['Q', 'R', 'B', 'N']
+    sq = 80
+    spacing = 10
+    total = len(pieces) * sq + (len(pieces) - 1) * spacing
+    start_x = WINDOW_W // 2 - total // 2
+    btn_y = box.y + 50
+
+    piece_rects = []
+    for i, pc in enumerate(pieces):
+        r = p.Rect(start_x + i * (sq + spacing), btn_y, sq, sq)
+        piece_rects.append(r)
+
+    clock = p.time.Clock()
+    while True:
+        mouse = p.mouse.get_pos()
+        # Redraw boxes
+        for i, (r, pc) in enumerate(zip(piece_rects, pieces)):
+            hov = r.collidepoint(mouse)
+            bg = (80, 110, 80) if hov else (50, 50, 60)
+            p.draw.rect(screen, bg, r, border_radius=8)
+            p.draw.rect(screen, C_PANEL_BORDER, r, 2, border_radius=8)
+            img_key = color + pc
+            if img_key in IMAGES:
+                img = p.transform.smoothscale(IMAGES[img_key], (sq - 10, sq - 10))
+                screen.blit(img, (r.x + 5, r.y + 5))
+
+        p.display.flip()
+        clock.tick(60)
+
+        for e in p.event.get():
+            if e.type == p.QUIT:
+                p.quit(); sys.exit()
+            elif e.type == p.MOUSEBUTTONDOWN:
+                for i, r in enumerate(piece_rects):
+                    if r.collidepoint(e.pos):
+                        return pieces[i]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drawing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def board_rect(row, col):
+    """Return the pygame.Rect for a board square."""
+    return p.Rect(BOARD_OFFSET_X + col * SQ_SIZE,
+                  BOARD_OFFSET_Y + row * SQ_SIZE,
+                  SQ_SIZE, SQ_SIZE)
+
+
+def draw_board(screen):
+    for row in range(DIMENSION):
+        for col in range(DIMENSION):
+            color = C_LIGHT_SQ if (row + col) % 2 == 0 else C_DARK_SQ
+            p.draw.rect(screen, color, board_rect(row, col))
+
+
+def draw_labels(screen):
+    files = "abcdefgh"
+    ranks = "87654321"
+    for i in range(8):
+        # file labels (bottom strip)
+        t = FONT_LABEL.render(files[i], True, C_TEXT_DIM)
+        x = BOARD_OFFSET_X + i * SQ_SIZE + SQ_SIZE // 2 - t.get_width() // 2
+        y = BOARD_OFFSET_Y + BOARD_SIZE + 4
+        screen.blit(t, (x, y))
+        # rank labels (left strip)
+        t = FONT_LABEL.render(ranks[i], True, C_TEXT_DIM)
+        x2 = BOARD_OFFSET_X - t.get_width() - 4
+        y2 = BOARD_OFFSET_Y + i * SQ_SIZE + SQ_SIZE // 2 - t.get_height() // 2
+        screen.blit(t, (x2, y2))
+
+
+def draw_highlights(screen, gs, validMoves, squareSelected):
+    # Last move highlight
+    if len(gs.moveLog) > 0:
+        last = gs.moveLog[-1]
+        for r, c in [(last.startRow, last.startCol), (last.endRow, last.endCol)]:
+            s = p.Surface((SQ_SIZE, SQ_SIZE), p.SRCALPHA)
+            s.fill((*C_LAST_MOVE, 130))
+            screen.blit(s, board_rect(r, c))
+
+    # King in check
+    if gs.inCheck:
+        king_loc = gs.whiteKinglocation if gs.whiteToMove else gs.blackKinglocation
+        s = p.Surface((SQ_SIZE, SQ_SIZE), p.SRCALPHA)
+        s.fill((*C_CHECK, 160))
+        screen.blit(s, board_rect(*king_loc))
+
+    if squareSelected != ():
+        row, col = squareSelected
+        piece = gs.board[row][col]
+        if piece != '--' and piece[0] == ('w' if gs.whiteToMove else 'b'):
+            # Selected square
+            s = p.Surface((SQ_SIZE, SQ_SIZE), p.SRCALPHA)
+            s.fill((*C_HIGHLIGHT, 140))
+            screen.blit(s, board_rect(row, col))
+
+            # Possible move dots
+            for move in validMoves:
+                if move.startRow == row and move.startCol == col:
+                    r, c = move.endRow, move.endCol
+                    sq_r = board_rect(r, c)
+                    if gs.board[r][c] == '--':
+                        # Small dot in centre
+                        dot_r = SQ_SIZE // 6
+                        cx = sq_r.x + SQ_SIZE // 2
+                        cy = sq_r.y + SQ_SIZE // 2
+                        circ_surf = p.Surface((SQ_SIZE, SQ_SIZE), p.SRCALPHA)
+                        p.draw.circle(circ_surf, (*C_POSSIBLE, 170),
+                                      (SQ_SIZE // 2, SQ_SIZE // 2), dot_r)
+                        screen.blit(circ_surf, sq_r)
+                    else:
+                        # Capture ring
+                        ring_surf = p.Surface((SQ_SIZE, SQ_SIZE), p.SRCALPHA)
+                        p.draw.circle(ring_surf, (*C_POSSIBLE, 170),
+                                      (SQ_SIZE // 2, SQ_SIZE // 2), SQ_SIZE // 2, 5)
+                        screen.blit(ring_surf, sq_r)
+
+
+def draw_pieces(screen, board):
+    for row in range(DIMENSION):
+        for col in range(DIMENSION):
+            piece = board[row][col]
+            if piece != "--":
+                screen.blit(IMAGES[piece], board_rect(row, col))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Status bar (top)
+# ─────────────────────────────────────────────────────────────────────────────
+def draw_status_bar(screen, gs, mode, difficulty, ai_thinking):
+    bar = p.Rect(0, 0, WINDOW_W, BOARD_OFFSET_Y)
+    p.draw.rect(screen, C_PANEL_BG, bar)
+    p.draw.line(screen, C_PANEL_BORDER, (0, BOARD_OFFSET_Y - 1), (WINDOW_W, BOARD_OFFSET_Y - 1))
+
+    # Title
+    title = FONT_TITLE.render("♟  Chess", True, (220, 220, 240))
+    screen.blit(title, (14, 14))
+
+    # Turn indicator
+    if not gs.checkmate and not gs.stalemate:
+        turn_text = "White to move" if gs.whiteToMove else "Black to move"
+        col = C_STATUS_WHITE if gs.whiteToMove else (140, 200, 255)
+        t = FONT_STATUS.render(turn_text, True, col)
+        screen.blit(t, (BOARD_OFFSET_X + BOARD_SIZE // 2 - t.get_width() // 2 - 60, 20))
+
+    # Difficulty / mode badge
+    if mode == "AI":
+        badge = f"AI: {difficulty}"
+        if ai_thinking:
+            badge += "  🤔"
+        bt = FONT_STATUS.render(badge, True, (150, 220, 150))
+        screen.blit(bt, (WINDOW_W - PANEL_WIDTH - bt.get_width() - 20, 20))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Side panel (move log + buttons)
+# ─────────────────────────────────────────────────────────────────────────────
+def draw_panel(screen, gs, btn_undo, btn_redo, btn_new, mouse_pos, move_scroll):
+    panel_x = BOARD_OFFSET_X + BOARD_SIZE
+    panel = p.Rect(panel_x, 0, PANEL_WIDTH, WINDOW_H)
+    p.draw.rect(screen, C_PANEL_BG, panel)
+    p.draw.line(screen, C_PANEL_BORDER, (panel_x, 0), (panel_x, WINDOW_H), 2)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    hdr = FONT_PANEL.render("Move History", True, C_TEXT_LIGHT)
+    screen.blit(hdr, (panel_x + 12, 70))
+    p.draw.line(screen, C_PANEL_BORDER,
+                (panel_x + 10, 92), (panel_x + PANEL_WIDTH - 10, 92))
+
+    # ── Move list ─────────────────────────────────────────────────────────────
+    log_area = p.Rect(panel_x + 2, 98, PANEL_WIDTH - 4, WINDOW_H - 200)
+    log_surf  = p.Surface((log_area.width, log_area.height))
+    log_surf.fill(C_PANEL_BG)
+
+    moves = gs.moveLog
+    pairs = []
+    for i in range(0, len(moves), 2):
+        w = str(moves[i])
+        b = str(moves[i + 1]) if i + 1 < len(moves) else "..."
+        pairs.append((i // 2 + 1, w, b))
+
+    row_h    = 22
+    visible  = log_area.height // row_h
+    # auto-scroll to bottom
+    total    = len(pairs)
+    start    = max(0, total - visible) if move_scroll < 0 else move_scroll
+
+    for idx, (num, white_m, black_m) in enumerate(pairs[start:start + visible]):
+        real_idx = start + idx
+        bg = C_MOVE_EVEN if idx % 2 == 0 else C_MOVE_ODD
+        # Highlight latest move row
+        if real_idx == total - 1:
+            bg = C_MOVE_CURRENT
+        r = p.Rect(0, idx * row_h, log_area.width, row_h)
+        p.draw.rect(log_surf, bg, r)
+
+        num_s  = FONT_MOVE.render(f"{num}.", True, C_TEXT_DIM)
+        white_s = FONT_MOVE.render(white_m, True, (220, 220, 220))
+        black_s = FONT_MOVE.render(black_m, True, (170, 200, 255))
+
+        log_surf.blit(num_s,  (4,  idx * row_h + 4))
+        log_surf.blit(white_s,(36, idx * row_h + 4))
+        log_surf.blit(black_s,(130, idx * row_h + 4))
+
+    screen.blit(log_surf, log_area.topleft)
+
+    # ── Buttons ───────────────────────────────────────────────────────────────
+    btn_y = WINDOW_H - 105
+    hover_undo = btn_undo.collidepoint(mouse_pos)
+    hover_redo = btn_redo.collidepoint(mouse_pos)
+    hover_new  = btn_new.collidepoint(mouse_pos)
+
+    draw_button(screen, btn_undo, "⟵ Undo (Z)", C_BTN_UNDO, hover=hover_undo)
+    draw_button(screen, btn_redo, "Redo (Y) ⟶", C_BTN_REDO, hover=hover_redo)
+    draw_button(screen, btn_new,  "New Game (R)", C_BTN_NEW,  hover=hover_new)
+
+    # ── Captured pieces summary ───────────────────────────────────────────────
+    draw_captured(screen, gs, panel_x)
+
+
+def draw_captured(screen, gs, panel_x):
+    white_captured = []
+    black_captured = []
+    for move in gs.moveLog:
+        if move.pieceCaptured != '--':
+            if move.pieceCaptured[0] == 'w':
+                black_captured.append(move.pieceCaptured)
+            else:
+                white_captured.append(move.pieceCaptured)
+
+    mini = SQ_SIZE // 3
+    y = BOARD_OFFSET_Y + BOARD_SIZE - mini - 4
+    x = panel_x + 8
+    for pc in white_captured[:12]:
+        img = p.transform.smoothscale(IMAGES[pc], (mini, mini))
+        screen.blit(img, (x, y))
+        x += mini + 1
+    y -= mini + 4
+    x = panel_x + 8
+    for pc in black_captured[:12]:
+        img = p.transform.smoothscale(IMAGES[pc], (mini, mini))
+        screen.blit(img, (x, y))
+        x += mini + 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Move animation
+# ─────────────────────────────────────────────────────────────────────────────
+def animateMove(move, screen, gs, clock):
+    dR = move.endRow - move.startRow
+    dC = move.endCol - move.startCol
+    frames_per_sq = 4
+    frame_count = (abs(dR) + abs(dC)) * frames_per_sq
+
+    for frame in range(frame_count + 1):
+        t = frame / frame_count if frame_count else 1
+        r = move.startRow + dR * t
+        c = move.startCol + dC * t
+
+        draw_board(screen)
+        draw_highlights(screen, gs, [], ())
+        draw_pieces(screen, gs.board)
+
+        # Erase destination square
+        color = C_LIGHT_SQ if (move.endRow + move.endCol) % 2 == 0 else C_DARK_SQ
+        p.draw.rect(screen, color, board_rect(move.endRow, move.endCol))
+
+        # Draw captured piece if present
+        if move.pieceCaptured != '--' and not move.isEnpassantMove:
+            screen.blit(IMAGES[move.pieceCaptured], board_rect(move.endRow, move.endCol))
+
+        # Draw moving piece
+        screen.blit(IMAGES[move.pieceMoved],
+                    p.Rect(BOARD_OFFSET_X + c * SQ_SIZE,
+                           BOARD_OFFSET_Y + r * SQ_SIZE,
+                           SQ_SIZE, SQ_SIZE))
+        p.display.flip()
+        clock.tick(240)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# End game overlay
+# ─────────────────────────────────────────────────────────────────────────────
+def draw_end_overlay(screen, text):
+    overlay = p.Surface((BOARD_SIZE, BOARD_SIZE), p.SRCALPHA)
+    overlay.fill((0, 0, 0, 140))
+    screen.blit(overlay, (BOARD_OFFSET_X, BOARD_OFFSET_Y))
+
+    font_big = p.font.SysFont("Segoe UI", 36, bold=True)
+    font_sm  = p.font.SysFont("Segoe UI", 18)
+
+    t1 = font_big.render(text, True, (255, 255, 100))
+    t2 = font_sm.render("Press R to play again", True, (200, 200, 200))
+
+    cx = BOARD_OFFSET_X + BOARD_SIZE // 2
+    cy = BOARD_OFFSET_Y + BOARD_SIZE // 2
+    screen.blit(t1, t1.get_rect(centerx=cx, centery=cy - 20))
+    screen.blit(t2, t2.get_rect(centerx=cx, centery=cy + 28))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sound (graceful fallback if files missing)
+# ─────────────────────────────────────────────────────────────────────────────
+class SilentSound:
+    def play(self): pass
+
+def load_sound(path):
+    try:
+        return p.mixer.Sound(path)
+    except Exception:
+        return SilentSound()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+def main():
+    p.init()
+    p.mixer.init()
+
+    screen = p.display.set_mode((WINDOW_W, WINDOW_H))
+    p.display.set_caption("Chess")
+    clock = p.time.Clock()
+    init_fonts()
+
+    move_sound    = load_sound("sounds/move-sound.mp3")
+    capture_sound = load_sound("sounds/capture.mp3")
+    promote_sound = load_sound("sounds/promote.mp3")
+
+    # ── Menus ─────────────────────────────────────────────────────────────────
+    mode = showModeSelect(screen)          # "AI" or "HUMAN"
+    difficulty = "HARD"
     playerWhiteHuman = True
     playerBlackHuman = True
-    mode_selected = False
-    modeButton1 = p.Rect(60, BOARD_HEIGHT//2 - 40, 180, 60)
-    modeButton2 = p.Rect(300, BOARD_HEIGHT//2 - 40, 180, 60)
-    squareSelected = ()
-    playerClicks = []
-    gameOver = False
-    AIThinking = False
-    moveFinderProcess = None
-    moveUndone = False
-    pieceCaptured = False
-    positionHistory = ""
-    previousPos = ""
-    countMovesForDraw = 0
-    COUNT_DRAW = 0
-    moveMade = False
-    animate = False
-    running = True
 
-    # Load background image for selection screens
-    bg_img = p.image.load("images/bg.png")
-    bg_img = p.transform.smoothscale(bg_img, (BOARD_WIDTH + MOVE_LOG_PANEL_WIDTH, BOARD_HEIGHT + 40))
+    if mode == "AI":
+        difficulty        = showDifficultySelect(screen)
+        playerWhiteHuman, playerBlackHuman = showColorSelect(screen)
 
-    # Multiplayer mode selection FIRST
-    while not mode_selected:
-        mouse_pos = p.mouse.get_pos()
-        screen.blit(bg_img, (0, 0))
-        titleFont = p.font.SysFont("Arial", 40, True, False)
-        modeFont = p.font.SysFont("Arial", 28, True, False)
-        title = titleFont.render("Select Game Mode", True, p.Color('white'))
-        screen.blit(title, (BOARD_WIDTH//2 - 140, BOARD_HEIGHT//2 - 140))
-        # Draw rounded buttons with hover effect
-        for btn, color, text, txt_color in [
-            (modeButton1, (70, 180, 255), "Human vs AI", (30, 30, 30)),
-            (modeButton2, (120, 220, 120), "Human vs Human", (30, 30, 30))]:
-            hovered = btn.collidepoint(mouse_pos)
-            btn_color = color if not hovered else (min(color[0]+40,255), min(color[1]+40,255), min(color[2]+40,255))
-            p.draw.rect(screen, btn_color, btn, border_radius=25)
-            border_col = (255,255,255) if hovered else (200,200,200)
-            p.draw.rect(screen, border_col, btn, 3, border_radius=25)
-            txt = modeFont.render(text, True, txt_color)
-            txt_rect = txt.get_rect(center=btn.center)
-            screen.blit(txt, txt_rect)
-        p.display.flip()
-        for e in p.event.get():
-            if e.type == p.QUIT:
-                p.quit()
-                sys.exit()
-            elif e.type == p.MOUSEBUTTONDOWN:
-                mouse_pos = e.pos
-                if modeButton1.collidepoint(mouse_pos):
-                    mode_selected = True
-                    mode_ai = True
-                elif modeButton2.collidepoint(mouse_pos):
-                    mode_selected = True
-                    mode_ai = False
+    # ── Game init ─────────────────────────────────────────────────────────────
+    def reset_game():
+        gs = GameState()
+        if gs.playerWantsToPlayAsBlack:
+            gs.board = [row[:] for row in gs.board1]
+        return gs, gs.getValidMoves()
 
-    # Color selection for Human vs AI
-    if mode_ai:
-        color_selected = False
-        colorButton1 = p.Rect(60, BOARD_HEIGHT//2 + 40, 180, 60)
-        colorButton2 = p.Rect(300, BOARD_HEIGHT//2 + 40, 180, 60)
-        while not color_selected:
-            mouse_pos = p.mouse.get_pos()
-            screen.blit(bg_img, (0, 0))
-            titleFont = p.font.SysFont("Arial", 40, True, False)
-            colorFont = p.font.SysFont("Arial", 28, True, False)
-            title = titleFont.render("Choose Your Color", True, p.Color('white'))
-            screen.blit(title, (BOARD_WIDTH//2 - 140, BOARD_HEIGHT//2 - 140))
-            # Draw rounded buttons with hover effect
-            for btn, color, text, txt_color in [
-                (colorButton1, (255,255,255), "Play as White", (30,30,30)),
-                (colorButton2, (30,30,30), "Play as Black", (255,255,255))]:
-                hovered = btn.collidepoint(mouse_pos)
-                btn_color = color if not hovered else (min(color[0]+40,255), min(color[1]+40,255), min(color[2]+40,255))
-                p.draw.rect(screen, btn_color, btn, border_radius=25)
-                border_col = (255,255,255) if hovered else (200,200,200)
-                p.draw.rect(screen, border_col, btn, 3, border_radius=25)
-                txt = colorFont.render(text, True, txt_color)
-                txt_rect = txt.get_rect(center=btn.center)
-                screen.blit(txt, txt_rect)
-            p.display.flip()
-            for e in p.event.get():
-                if e.type == p.QUIT:
-                    p.quit()
-                    sys.exit()
-                elif e.type == p.MOUSEBUTTONDOWN:
-                    mouse_pos = e.pos
-                    if colorButton1.collidepoint(mouse_pos):
-                        playerWhiteHuman = True
-                        playerBlackHuman = False
-                        color_selected = True
-                    elif colorButton2.collidepoint(mouse_pos):
-                        playerWhiteHuman = False
-                        playerBlackHuman = True
-                        color_selected = True
-
-    # Now create game state and board
-    gs = GameState()
-    if (gs.playerWantsToPlayAsBlack):
-        gs.board = gs.board1
-    validMoves = gs.getValidMoves()
+    gs, validMoves = reset_game()
     loadImages()
-    playerClicks = []
-    gameOver = False
-    AIThinking = False
+
+    # Panel button rects
+    panel_x   = BOARD_OFFSET_X + BOARD_SIZE
+    btn_w, btn_h = PANEL_WIDTH - 24, 34
+    btn_undo = p.Rect(panel_x + 12, WINDOW_H - 110, btn_w, btn_h)
+    btn_redo = p.Rect(panel_x + 12, WINDOW_H - 72,  btn_w, btn_h)
+    btn_new  = p.Rect(panel_x + 12, WINDOW_H - 34,  btn_w, btn_h)
+
+    squareSelected    = ()
+    playerClicks      = []
+    gameOver          = False
+    AIThinking        = False
     moveFinderProcess = None
-    moveUndone = False
-    pieceCaptured = False
-    positionHistory = ""
-    previousPos = ""
+    moveUndone        = False
+    moveMade          = False
+    animate           = False
+    pieceCaptured     = False
+    move_scroll       = -1  # -1 = auto-scroll to bottom
+    positionHistory   = ""
+    previousPos       = ""
     countMovesForDraw = 0
-    COUNT_DRAW = 0
+    COUNT_DRAW        = 0
+
+    end_text = ""
     running = True
 
     while running:
+        mouse_pos = p.mouse.get_pos()
+        humanTurn = (gs.whiteToMove and playerWhiteHuman) or \
+                    (not gs.whiteToMove and playerBlackHuman)
+
         for e in p.event.get():
             if e.type == p.QUIT:
                 running = False
-            # Mouse Handler
+
+            # ── Mouse ─────────────────────────────────────────────────────────
             elif e.type == p.MOUSEBUTTONDOWN:
-                if not gameOver:  # allow mouse handling only if its not game over
-                    location = p.mouse.get_pos()
-                    col = location[0]//SQ_SIZE
-                    row = location[1]//SQ_SIZE
-                    # if user clicked on same square twice or user click outside board
-                    if squareSelected == (row, col) or col >= 8:
-                        squareSelected = ()  # deselect
-                        playerClicks = []  # clear player clicks
-                    else:
-                        squareSelected = (row, col)
-                        # append player both clicks (place and destination)
-                        playerClicks.append(squareSelected)
-                    # after second click (at destination)
-                    # humanTurn is always defined here
-                    humanTurn = (gs.whiteToMove and playerWhiteHuman) or (not gs.whiteToMove and playerBlackHuman)
-                    if len(playerClicks) == 2 and humanTurn:
-                        # user generated a move
-                        move = Move(playerClicks[0], playerClicks[1], gs.board)
-                        for i in range(len(validMoves)):
-                            # check if the move is in the validMoves
-                            if move == validMoves[i]:
-                                # Check if a piece is captured at the destination square
-                                if gs.board[validMoves[i].endRow][validMoves[i].endCol] != '--':
-                                    pieceCaptured = True
-                                gs.makeMove(validMoves[i])
-                                if (move.isPawnPromotion):
-                                    # Show pawn promotion popup and get the selected piece
-                                    promotion_choice = pawnPromotionPopup(screen, gs)
-                                    # Set the promoted piece on the board
-                                    gs.board[move.endRow][move.endCol] = move.pieceMoved[0] + promotion_choice
-                                    promote_sound.play()
-                                    pieceCaptured = False
-                                # add sound for human move
-                                if (pieceCaptured or move.isEnpassantMove):
-                                    capture_sound.play()
-                                elif not move.isPawnPromotion:
-                                    move_sound.play()
-                                pieceCaptured = False
-                                moveMade = True
-                                animate = True
-                                squareSelected = ()
-                                playerClicks = []
-                        if not moveMade:
-                            playerClicks = [squareSelected]
+                mx, my = e.pos
 
-            # Key Handler
-            elif e.type == p.KEYDOWN:
-                if e.key == p.K_z:  # undo when z is pressed
+                # Panel buttons
+                if btn_undo.collidepoint(mx, my):
                     gs.undoMove()
-                    moveMade = True
-                    animate = False
-                    gameOver = False
-                    if AIThinking:
-                        moveFinderProcess.terminate()  # terminate the ai thinking if we undo
-                        AIThinking = False
-                    moveUndone = True
-                if e.key == p.K_r:  # reset board when 'r' is pressed
-                    gs = GameState()
-                    validMoves = gs.getValidMoves()
-                    squareSelected = ()
-                    playerClicks = []
-                    moveMade = False
-                    animate = False
-                    gameOver = False
-                    if AIThinking:
-                        moveFinderProcess.terminate()  # terminate the ai thinking if we undo
-                        AIThinking = False
-                    moveUndone = True
+                    moveMade = True; animate = False
+                    gameOver = False; moveUndone = True
+                    end_text = ""
+                    if AIThinking and moveFinderProcess:
+                        moveFinderProcess.terminate(); AIThinking = False
 
-        # Always define humanTurn before AI move finder
-        humanTurn = (gs.whiteToMove and playerWhiteHuman) or (not gs.whiteToMove and playerBlackHuman)
-        # AI move finder
+                elif btn_redo.collidepoint(mx, my):
+                    if gs.redoStack:
+                        saved_redo = gs.redoStack[:]
+                        move_to_redo = saved_redo.pop()
+                        gs.makeMove(move_to_redo)
+                        gs.redoStack = saved_redo
+                        moveMade = True; animate = True
+                        gameOver = False; end_text = ""
+
+                elif btn_new.collidepoint(mx, my):
+                    gs, validMoves = reset_game()
+                    squareSelected = (); playerClicks = []
+                    moveMade = False; animate = False
+                    gameOver = False; end_text = ""
+                    AIThinking = False; moveUndone = True
+                    positionHistory = ""; previousPos = ""
+                    countMovesForDraw = 0; COUNT_DRAW = 0
+                    if moveFinderProcess and moveFinderProcess.is_alive():
+                        moveFinderProcess.terminate()
+
+                # Board clicks
+                elif not gameOver and humanTurn:
+                    col = (mx - BOARD_OFFSET_X) // SQ_SIZE
+                    row = (my - BOARD_OFFSET_Y) // SQ_SIZE
+                    if 0 <= row < 8 and 0 <= col < 8:
+                        if squareSelected == (row, col):
+                            squareSelected = (); playerClicks = []
+                        else:
+                            squareSelected = (row, col)
+                            playerClicks.append(squareSelected)
+
+                        if len(playerClicks) == 2:
+                            move = Move(playerClicks[0], playerClicks[1], gs.board)
+                            for vm in validMoves:
+                                if move == vm:
+                                    if gs.board[vm.endRow][vm.endCol] != '--':
+                                        pieceCaptured = True
+                                    gs.makeMove(vm)
+                                    if vm.isPawnPromotion:
+                                        promo = pawnPromotionPopup(screen, vm.pieceMoved[0])
+                                        gs.board[vm.endRow][vm.endCol] = vm.pieceMoved[0] + promo
+                                        promote_sound.play(); pieceCaptured = False
+                                    if pieceCaptured or vm.isEnpassantMove:
+                                        capture_sound.play()
+                                    elif not vm.isPawnPromotion:
+                                        move_sound.play()
+                                    pieceCaptured = False
+                                    moveMade = True; animate = True
+                                    squareSelected = (); playerClicks = []
+                                    break
+                            if not moveMade:
+                                playerClicks = [squareSelected]
+
+            # ── Keyboard ──────────────────────────────────────────────────────
+            elif e.type == p.KEYDOWN:
+                if e.key == p.K_z:
+                    gs.undoMove()
+                    moveMade = True; animate = False
+                    gameOver = False; moveUndone = True; end_text = ""
+                    if AIThinking and moveFinderProcess:
+                        moveFinderProcess.terminate(); AIThinking = False
+
+                elif e.key == p.K_y:
+                    if gs.redoStack:
+                        saved_redo = gs.redoStack[:]
+                        move_to_redo = saved_redo.pop()
+                        gs.makeMove(move_to_redo)
+                        gs.redoStack = saved_redo
+                        moveMade = True; animate = True
+                        gameOver = False; end_text = ""
+
+                elif e.key == p.K_r:
+                    gs, validMoves = reset_game()
+                    squareSelected = (); playerClicks = []
+                    moveMade = False; animate = False
+                    gameOver = False; end_text = ""
+                    AIThinking = False; moveUndone = True
+                    positionHistory = ""; previousPos = ""
+                    countMovesForDraw = 0; COUNT_DRAW = 0
+                    if moveFinderProcess and moveFinderProcess.is_alive():
+                        moveFinderProcess.terminate()
+
+        # ── AI turn ───────────────────────────────────────────────────────────
+        humanTurn = (gs.whiteToMove and playerWhiteHuman) or \
+                    (not gs.whiteToMove and playerBlackHuman)
+
         if not gameOver and not humanTurn and not moveUndone:
             if not AIThinking:
                 AIThinking = True
-                returnQueue = Queue()  # keep track of data, to pass data between threads
-                moveFinderProcess = Process(target=findBestMove, args=(
-                    gs, validMoves, returnQueue))  # when processing start we call these process
-                # call findBestMove(gs, validMoves, returnQueue) #rest of the code could still work even if the ai is thinking
+                returnQueue = Queue()
+                moveFinderProcess = Process(
+                    target=findBestMove,
+                    args=(gs, validMoves, returnQueue, difficulty))
                 moveFinderProcess.start()
-                # AIMove = findBestMove(gs, validMoves)
-                # gs.makeMove(AIMove)
-            if not moveFinderProcess.is_alive():
-                AIMove = returnQueue.get()  # return from returnQueue
+
+            if moveFinderProcess and not moveFinderProcess.is_alive():
+                AIMove = returnQueue.get()
                 if AIMove is None:
                     AIMove = findRandomMoves(validMoves)
 
@@ -390,216 +738,65 @@ def main():
                 gs.makeMove(AIMove)
 
                 if AIMove.isPawnPromotion:
-                    # Show pawn promotion popup and get the selected piece
-                    promotion_choice = pawnPromotionPopup(screen, gs)
-                    # Set the promoted piece on the board
-                    gs.board[AIMove.endRow][AIMove.endCol] = AIMove.pieceMoved[0] + \
-                        promotion_choice
-                    promote_sound.play()
-                    pieceCaptured = False
+                    gs.board[AIMove.endRow][AIMove.endCol] = AIMove.pieceMoved[0] + 'Q'
+                    promote_sound.play(); pieceCaptured = False
 
-                # add sound for human move
-                if (pieceCaptured or AIMove.isEnpassantMove):
-                    # Play capture sound
+                if pieceCaptured or AIMove.isEnpassantMove:
                     capture_sound.play()
-                    # print("capture sound")
                 elif not AIMove.isPawnPromotion:
-                    # Play move sound
                     move_sound.play()
-                    # print("move sound")
-                pieceCaptured = False
-                AIThinking = False
-                moveMade = True
-                animate = True
-                squareSelected = ()
-                playerClicks = []
 
+                pieceCaptured = False
+                AIThinking    = False
+                moveMade      = True
+                animate       = True
+                squareSelected = (); playerClicks = []
+
+        # ── Post-move ─────────────────────────────────────────────────────────
         if moveMade:
-            if countMovesForDraw == 0 or countMovesForDraw == 1 or countMovesForDraw == 2 or countMovesForDraw == 3:
+            if countMovesForDraw < 4:
                 countMovesForDraw += 1
             if countMovesForDraw == 4:
                 positionHistory += gs.getBoardString()
                 if previousPos == positionHistory:
-                    COUNT_DRAW += 1
-                    positionHistory = ""
-                    countMovesForDraw = 0
+                    COUNT_DRAW += 1; positionHistory = ""; countMovesForDraw = 0
                 else:
-                    previousPos = positionHistory
-                    positionHistory = ""
-                    countMovesForDraw = 0
-                    COUNT_DRAW = 0
-            # Call animateMove to animate the move
-            if animate:
-                animateMove(gs.moveLog[-1], screen, gs.board, clock)
-            # genetare new set of valid move if valid move is made
-            validMoves = gs.getValidMoves()
-            moveMade = False
-            animate = False
-            moveUndone = False
+                    previousPos = positionHistory; positionHistory = ""
+                    countMovesForDraw = 0; COUNT_DRAW = 0
 
-        drawGameState(screen, gs, validMoves, squareSelected, moveLogFont)
+            if animate and gs.moveLog:
+                animateMove(gs.moveLog[-1], screen, gs, clock)
+            validMoves  = gs.getValidMoves()
+            moveMade    = False
+            animate     = False
+            moveUndone  = False
 
-        if COUNT_DRAW == 1:
-            gameOver = True
-            text = 'Draw due to repetition'
-            drawEndGameText(screen, text)
+        # ── Draw ──────────────────────────────────────────────────────────────
+        screen.fill(C_BG)
+        draw_status_bar(screen, gs, mode, difficulty, AIThinking)
+        draw_board(screen)
+        draw_highlights(screen, gs, validMoves, squareSelected)
+        draw_pieces(screen, gs.board)
+        draw_labels(screen)
+        draw_panel(screen, gs, btn_undo, btn_redo, btn_new, mouse_pos, move_scroll)
+
+        # ── End-game check ────────────────────────────────────────────────────
+        if COUNT_DRAW >= 1:
+            gameOver = True; end_text = "Draw by repetition"
         if gs.stalemate:
-            gameOver = True
-            text = 'Stalemate'
-            drawEndGameText(screen, text)
+            gameOver = True; end_text = "Stalemate"
         elif gs.checkmate:
             gameOver = True
-            text = 'Black wins by checkmate' if gs.whiteToMove else 'White wins by checkmate'
-            drawEndGameText(screen, text)
+            end_text = "Black wins!" if gs.whiteToMove else "White wins!"
+
+        if gameOver and end_text:
+            draw_end_overlay(screen, end_text)
 
         clock.tick(MAX_FPS)
         p.display.flip()
 
-
-def drawGameState(screen, gs, validMoves, squareSelected, moveLogFont):
-    drawSquare(screen)  # draw square on board
-    highlightSquares(screen, gs, validMoves, squareSelected)
-    drawPieces(screen, gs.board)
-    drawMoveLog(screen, gs, moveLogFont)
+    p.quit()
 
 
-def drawSquare(screen):
-    global colors
-    colors = [p.Color(LIGHT_SQUARE_COLOR), p.Color(DARK_SQUARE_COLOR)]
-    for row in range(DIMENSION):
-        for col in range(DIMENSION):
-            color = colors[((row + col) % 2)]
-            p.draw.rect(screen, color, p.Rect(
-                col * SQ_SIZE, row * SQ_SIZE, SQ_SIZE, SQ_SIZE))
-
-
-def highlightSquares(screen, gs, validMoves, squareSelected):
-    if squareSelected != ():  # make sure there is a square to select
-        row, col = squareSelected
-        # make sure they click there own piece
-        if gs.board[row][col][0] == ('w' if gs.whiteToMove else 'b'):
-            # highlight selected piece square
-            # Surface in pygame used to add images or transperency feature
-            s = p.Surface((SQ_SIZE, SQ_SIZE))
-            # set_alpha --> transperancy value (0 transparent)
-            s.set_alpha(100)
-            s.fill(p.Color(MOVE_HIGHLIGHT_COLOR))
-            screen.blit(s, (col*SQ_SIZE, row*SQ_SIZE))
-            # highlighting valid square
-            s.fill(p.Color(POSSIBLE_MOVE_COLOR))
-            for move in validMoves:
-                if move.startRow == row and move.startCol == col:
-                    screen.blit(s, (move.endCol*SQ_SIZE, move.endRow*SQ_SIZE))
-
-
-def drawPieces(screen, board):
-    for row in range(DIMENSION):
-        for col in range(DIMENSION):
-            piece = board[row][col]
-            if piece != "--":
-                screen.blit(IMAGES[piece], p.Rect(
-                    col * SQ_SIZE, row * SQ_SIZE, SQ_SIZE, SQ_SIZE))
-
-
-def drawMoveLog(screen, gs, font):
-    # rectangle
-    moveLogRect = p.Rect(
-        BOARD_WIDTH, 0, MOVE_LOG_PANEL_WIDTH, MOVE_LOG_PANEL_HEIGHT)
-    p.draw.rect(screen, p.Color(LIGHT_SQUARE_COLOR), moveLogRect)
-    moveLog = gs.moveLog
-    moveTexts = []
-
-    for i in range(0, len(moveLog), 2):
-        moveString = " " + str(i//2 + 1) + ". " + str(moveLog[i]) + " "
-        if i+1 < len(moveLog):
-            moveString += str(moveLog[i+1])
-        moveTexts.append(moveString)
-
-    movesPerRow = 3
-    padding = 10  # Increase padding for better readability
-    lineSpacing = 5  # Increase line spacing for better separation
-    textY = padding
-
-    for i in range(0, len(moveTexts), movesPerRow):
-        text = ""
-        for j in range(movesPerRow):
-            if i + j < len(moveTexts):
-                text += moveTexts[i+j]
-
-        textObject = font.render(text, True, p.Color('black'))
-
-        # Adjust text location based on padding and line spacing
-        textLocation = moveLogRect.move(padding, textY)
-        screen.blit(textObject, textLocation)
-
-        # Update Y coordinate for the next line with increased line spacing
-        textY += textObject.get_height() + lineSpacing
-
-
-# animating a move
-def animateMove(move, screen, board, clock):
-    global colors
-    # change in row, col
-    deltaRow = move.endRow - move.startRow
-    deltaCol = move.endCol - move.startCol
-    framesPerSquare = 5  # frames move one square
-    # how many frame the animation will take
-    frameCount = (abs(deltaRow) + abs(deltaCol)) * framesPerSquare
-    # generate all the coordinates
-    for frame in range(frameCount + 1):
-        # how much does the row and col move by
-        row, col = ((move.startRow + deltaRow*frame/frameCount, move.startCol +
-                    deltaCol*frame/frameCount))  # how far through the animation
-        # for each frame draw the moved piece
-        drawSquare(screen)
-        drawPieces(screen, board)
-
-        # erase the piece moved from its ending squares
-        color = colors[(move.endRow + move.endCol) %
-                       2]  # get color of the square
-        endSquare = p.Rect(move.endCol*SQ_SIZE, move.endRow *
-                           SQ_SIZE, SQ_SIZE, SQ_SIZE)  # pygame rectangle
-        p.draw.rect(screen, color, endSquare)
-
-        # draw the captured piece back
-        if move.pieceCaptured != '--':
-            if move.isEnpassantMove:
-                enPassantRow = move.endRow + \
-                    1 if move.pieceCaptured[0] == 'b' else move.endRow - 1
-                endSquare = p.Rect(move.endCol*SQ_SIZE, enPassantRow *
-                                   SQ_SIZE, SQ_SIZE, SQ_SIZE)  # pygame rectangle
-            screen.blit(IMAGES[move.pieceCaptured], endSquare)
-
-        # draw moving piece
-        screen.blit(IMAGES[move.pieceMoved], p.Rect(
-            col*SQ_SIZE, row*SQ_SIZE, SQ_SIZE, SQ_SIZE))
-
-        p.display.flip()
-        clock.tick(240)
-
-
-def drawEndGameText(screen, text):
-    # create font object with type and size of font you want
-    font = p.font.SysFont("Times New Roman", 30, False, False)
-    # use the above font and render text (0 ? antialias)
-    textObject = font.render(text, True, p.Color('black'))
-
-    # Get the width and height of the textObject
-    text_width = textObject.get_width()
-    text_height = textObject.get_height()
-
-    # Calculate the position to center the text on the screen
-    textLocation = p.Rect(0, 0, BOARD_WIDTH, BOARD_HEIGHT).move(
-        BOARD_WIDTH/2 - text_width/2, BOARD_HEIGHT/2 - text_height/2)
-
-    # Blit the textObject onto the screen at the calculated position
-    screen.blit(textObject, textLocation)
-
-    # Create a second rendering of the text with a slight offset for a shadow effect
-    textObject = font.render(text, 0, p.Color('Black'))
-    screen.blit(textObject, textLocation.move(1, 1))
-
-
-# if we import main then main function wont run it will run only while running this file
 if __name__ == "__main__":
     main()
